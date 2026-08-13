@@ -1,0 +1,16 @@
+# --- visão computacional ---
+ultralytics>=8.4
+opencv-python>=4.10
+torch>=2.4
+
+# --- módulo preditivo ---
+xgboost>=3.0
+scikit-learn>=1.5      # exigido pela API sklearn do XGBoost
+pandas>=2.2
+numpy>=1.26
+
+# --- aquisição de dados ---
+requests>=2.32
+
+# --- gráficos ---
+matplotlib>=3.8

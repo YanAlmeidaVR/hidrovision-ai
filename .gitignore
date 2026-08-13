@@ -1,0 +1,40 @@
+# ---------- dados brutos e intermediários ----------
+# pacotes anuais do INMET (347 MB) — baixar em portal.inmet.gov.br/dadoshistoricos
+*.zip
+# checkpoint do download da ANA e série intermediária
+ana_bruto.csv
+ana_horario.csv
+# o dados_treino.csv É versionado (dataset final, 972 KB) — não ignorar
+
+# ---------- gerados em execução ----------
+*.db
+*.log
+demo.db
+replay.db
+
+# ---------- saídas de treino do YOLO ----------
+runs/
+weights/
+*.onnx
+*.tflite
+
+# ---------- credenciais ----------
+.env
+*.key
+secrets.json
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# ---------- editores e SO ----------
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store
