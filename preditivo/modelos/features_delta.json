@@ -1,0 +1,38 @@
+{
+  "features": [
+    "nivel",
+    "nivel_lag1",
+    "nivel_lag2",
+    "nivel_lag3",
+    "nivel_lag6",
+    "nivel_lag12",
+    "nivel_lag24",
+    "delta_1h",
+    "delta_3h",
+    "delta_6h",
+    "tend_6h",
+    "chuva",
+    "chuva_acum3",
+    "chuva_acum6",
+    "chuva_acum12",
+    "chuva_acum24",
+    "chuva_acum48",
+    "chuva_acum72",
+    "chuva_max6",
+    "horas_sem_chuva",
+    "chuva24_x_nivel",
+    "mes_sen",
+    "mes_cos"
+  ],
+  "horizontes": [
+    6,
+    12,
+    24
+  ],
+  "alvo": "variacao_cm",
+  "limiares": {
+    "atencao": 228,
+    "alerta": 304,
+    "emergencia": 388
+  }
+}
