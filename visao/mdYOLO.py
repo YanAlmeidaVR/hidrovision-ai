@@ -206,9 +206,11 @@ def faixa_do_nivel(leitura, numeros=None):
 
 def anotar(frame, resultado, leitura, numeros=None):
     """
-    Desenha as detecções e uma faixa inferior discreta informando o menor
-    número visível e o nível aproximado. Sem painel sobre a imagem — as caixas
-    do detector ficam livres.
+    Desenha as detecções do YOLO e uma faixa inferior enxuta com:
+      - os números efetivamente reconhecidos (após a correção geométrica);
+      - quais números faltaram na sequência, quando há falha de detecção.
+
+    Sem barra lateral e sem texto sobreposto: a imagem fica livre para as caixas.
     """
     img = resultado.plot()
     h, w = img.shape[:2]
@@ -218,52 +220,42 @@ def anotar(frame, resultado, leitura, numeros=None):
     VERM = (60, 60, 235)
     BRANCO = (245, 245, 245)
 
+    linhas = []          # (texto, cor)
     if leitura.nivel_cm is None:
-        if leitura.metodo == "sem_numeros":
-            texto, cor = "regua detectada - nenhum numero visivel", AMBAR
-        else:
-            texto, cor = "procurando regua", VERM
+        cor = AMBAR if leitura.metodo == "sem_numeros" else VERM
+        linhas.append(("regua detectada - nenhum numero visivel"
+                       if leitura.metodo == "sem_numeros"
+                       else "procurando regua", cor))
     else:
-        menor = int(min(int(d.classe) for d in numeros)) if numeros else None
         cor = (VERDE if leitura.metodo in ("interpolacao", "geometria", "surface")
                else AMBAR)
-        partes = []
+        vals = sorted({int(d.classe) for d in numeros}) if numeros else []
+        menor = vals[0] if vals else None
+        cab = []
         if menor is not None:
-            partes.append(f"menor numero visivel: {menor}")
-        partes.append(f"nivel aproximado: ~{leitura.nivel_cm:.0f} cm")
-        texto = "   |   ".join(partes)
+            cab.append(f"menor: {menor} cm")
+        cab.append(f"nivel ~{leitura.nivel_cm:.0f} cm")
+        linhas.append(("   |   ".join(cab), BRANCO))
+        if vals:
+            linhas.append(("detectados: " + " ".join(str(v) for v in vals), BRANCO))
+        if leitura.lacunas:
+            linhas.append(("FALTANDO na sequencia: "
+                           + " ".join(str(v) for v in leitura.lacunas), AMBAR))
 
-    # faixa inferior semitransparente
-    alt = 40
+    # faixa inferior semitransparente, dimensionada pelo número de linhas
+    alt = 16 + 24 * len(linhas)
     y0 = h - alt
     sub = img[y0:h, 0:w].copy()
-    img[y0:h, 0:w] = cv2.addWeighted(sub, 0.25, np.zeros_like(sub), 0.75, 0)
+    img[y0:h, 0:w] = cv2.addWeighted(sub, 0.22, np.zeros_like(sub), 0.78, 0)
     cv2.rectangle(img, (0, y0), (w, y0 + 3), cor, -1)
-    cv2.putText(img, texto, (14, h - 13), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
-                cor if leitura.nivel_cm is None else BRANCO, 2)
 
-    # avisos da geometria, à direita da faixa
-    aviso = []
-    if leitura.correcoes:
-        aviso.append(f"{len(leitura.correcoes)} corrigido(s)")
-    if leitura.lacunas:
-        aviso.append(f"nao detectados: {leitura.lacunas}")
-    if aviso:
-        msg = " | ".join(aviso)
-        (tw, _), _ = cv2.getTextSize(msg, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
-        cv2.putText(img, msg, (max(14, w - tw - 14), h - 13),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, AMBAR, 1)
-
-    # barra vertical da régua na lateral direita
-    if leitura.nivel_cm is not None:
-        bx, bw = w - 40, 20
-        by, bh = 14, min(280, h - alt - 28)
-        cv2.rectangle(img, (bx, by), (bx + bw, by + bh), (90, 90, 90), 1)
-        prop = float(np.clip(leitura.nivel_cm / 100.0, 0, 1))
-        ytopo = int(by + bh * (1 - prop))
-        cv2.rectangle(img, (bx + 1, ytopo), (bx + bw - 1, by + bh - 1),
-                      (200, 140, 40), -1)
-        cv2.line(img, (bx - 5, ytopo), (bx + bw + 5, ytopo), cor, 2)
+    y = y0 + 26
+    for i, (texto, c) in enumerate(linhas):
+        escala = 0.62 if i == 0 else 0.5
+        grossura = 2 if i == 0 else 1
+        cv2.putText(img, texto, (14, y), cv2.FONT_HERSHEY_SIMPLEX,
+                    escala, c, grossura)
+        y += 24
     return img
 
 
@@ -370,10 +362,6 @@ def main():
             leitura = ler_nivel(numeros, gauges, surfaces)
             suave = filtro.add(leitura.nivel_cm)
             img = anotar(frame, res, leitura, numeros)
-            if suave is not None:
-                cv2.putText(img, f"mediana de 5 leituras: ~{suave:.0f} cm",
-                            (12, img.shape[0] - 16), cv2.FONT_HERSHEY_SIMPLEX,
-                            0.55, (245, 245, 245), 1)
             cv2.imshow("HidroVision", img)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
