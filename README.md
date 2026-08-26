@@ -28,7 +28,7 @@ aqui?*
 
 Essa lacuna tem uma causa prática. Monitorar o nível de um rio exige
 equipamento, e sistemas convencionais custam dezenas de milhares de reais por
-ponto de medição — inviável para a maior parte dos mais de 5.500 municípios
+ponto de medição, inviável para a maior parte dos mais de 5.500 municípios
 brasileiros. Onde não há sensor, a leitura é manual e o alerta chega tarde, ou
 simplesmente não chega.
 
