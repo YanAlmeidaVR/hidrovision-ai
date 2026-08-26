@@ -240,26 +240,6 @@ A cada hora o monitor consulta o nível corrente na estação da ANA, busca a
 previsão de chuva e executa os modelos em **dois cenários** — com e sem a chuva
 prevista. A diferença entre eles quantifica o impacto esperado da precipitação.
 
----
-
-## Limitações reconhecidas
-
-- **A classe `surface` não convergiu** no conjunto de teste (recall 0,388). A
-  linha d'água não tem forma consistente: varia com reflexo, turbidez e sombra.
-  A leitura se apoia na geometria dos números.
-- **O erro de leitura em centímetros ainda não foi medido em campo.** A
-  resolução garantida é a faixa de 10 cm.
-- **A chuva é fator secundário nos horizontes curtos.** O nível recente já
-  carrega o efeito da chuva que caiu; o modelo é de inércia hidrológica, não um
-  modelo chuva-vazão completo.
-- **Os modelos foram treinados com chuva observada, não com previsões.**
-  Incorporar a chuva prevista às variáveis de acumulado é uma aproximação
-  válida, já que a física do escoamento não distingue a origem do dado, mas
-  herda o erro da previsão meteorológica.
-- **O horizonte máximo é de 24 horas.** Antecipações mais longas vêm da previsão
-  meteorológica, não dos modelos.
-
----
 
 ## Instalação
 
