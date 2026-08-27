@@ -1,0 +1,10 @@
+{
+  "horas_previstas": 72,
+  "total_mm": 128.0,
+  "media_mmh": 1.78,
+  "pico_mmh": 19.0,
+  "prob_max": 95,
+  "horas_chuva": 38,
+  "temp_atual": 18.5,
+  "descricao": "128 mm previstos para os proximos 3 dias (38 h com chuva, pico de 19 mm/h, probabilidade maxima de 95%)"
+}
