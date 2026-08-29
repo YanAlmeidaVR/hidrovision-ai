@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS leituras (
     metodo TEXT,
     confianca REAL,
     menor_numero INTEGER,
-    fonte TEXT DEFAULT 'camera'     -- 'camera' | 'ana'
+    fonte TEXT DEFAULT 'camera',    -- 'camera' | 'ana'
+    chuva_mm REAL                   -- pluviômetro da estação, quando houver
 );
 CREATE INDEX IF NOT EXISTS idx_leituras_ts ON leituras(ts);
 -- uma leitura por instante e fonte. O monitor reconsulta os últimos dias a
@@ -84,25 +85,41 @@ class Banco:
 
     def _migrar(self):
         """
-        Bancos criados antes do índice único podem ter horas repetidas, e o
-        SQLite recusa criar a restrição sobre dados que já a violam. Remove as
-        duplicatas mantendo a linha mais recente de cada (ts, fonte).
+        Ajusta bancos criados por versões anteriores.
+
+        Cada passo é independente e tolerante: um banco pode já ter o índice
+        único e ainda não ter a coluna de chuva, ou o contrário. Encadear os
+        passos com saída antecipada faria um deles pular o outro.
         """
         try:
             tem = self.con.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' "
                 "AND name='leituras'").fetchone()
-            if not tem:
-                return
+        except sqlite3.Error:
+            return
+        if not tem:
+            return          # banco novo: o _SCHEMA cria tudo já correto
+
+        # 1. horas repetidas impedem o índice único de ser criado
+        try:
             ja_tem_indice = self.con.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='index' "
                 "AND name='ix_leituras_ts_fonte'").fetchone()
-            if ja_tem_indice:
-                return
-            self.con.execute(
-                "DELETE FROM leituras WHERE rowid NOT IN "
-                "(SELECT MAX(rowid) FROM leituras GROUP BY ts, fonte)")
-            self.con.commit()
+            if not ja_tem_indice:
+                self.con.execute(
+                    "DELETE FROM leituras WHERE rowid NOT IN "
+                    "(SELECT MAX(rowid) FROM leituras GROUP BY ts, fonte)")
+                self.con.commit()
+        except sqlite3.Error:
+            pass
+
+        # 2. coluna de chuva do pluviômetro da estação
+        try:
+            cols = [c[1] for c in
+                    self.con.execute("PRAGMA table_info(leituras)").fetchall()]
+            if cols and "chuva_mm" not in cols:
+                self.con.execute("ALTER TABLE leituras ADD COLUMN chuva_mm REAL")
+                self.con.commit()
         except sqlite3.Error:
             pass
 
@@ -114,7 +131,7 @@ class Banco:
     # ------------------------------------------------------------------
     def gravar_leitura(self, nivel_cm, metodo="", confianca=None,
                        menor_numero=None, ts=None, janela_mediana=3,
-                       fonte="camera"):
+                       fonte="camera", chuva_mm=None):
         """
         Grava uma leitura. O valor gravado é a MEDIANA das últimas
         `janela_mediana` leituras (incluindo esta), de modo que um outlier
@@ -135,9 +152,9 @@ class Banco:
         ts = ts if ts is not None else _agora()
         self.con.execute(
             "INSERT OR REPLACE INTO leituras (ts, nivel_cm, metodo, confianca, "
-            "menor_numero, fonte) VALUES (?,?,?,?,?,?)",
+            "menor_numero, fonte, chuva_mm) VALUES (?,?,?,?,?,?,?)",
             (pd.Timestamp(ts).isoformat(), valor, metodo, confianca,
-             menor_numero, fonte))
+             menor_numero, fonte, chuva_mm))
         self.con.commit()
         return valor
 
@@ -188,6 +205,41 @@ class Banco:
         out = serie.reindex(grade).to_frame("nivel_cm")
         out.index.name = "datahora"
         return out
+
+    def chuva_recente(self, horas=6, fonte="ana"):
+        """
+        Chuva medida pelo pluviômetro da estação nas últimas horas.
+
+        É medição de instrumento, diferente da previsão meteorológica: capta o
+        evento convectivo que um modelo em grade de quilômetros costuma
+        perder. Devolve dict com o acumulado, a intensidade da última hora
+        cheia e o instante da última medição, ou None se não houver dado.
+        """
+        ult = self.con.execute(
+            "SELECT MAX(ts) FROM leituras WHERE chuva_mm IS NOT NULL"
+        ).fetchone()[0]
+        if ult is None:
+            return None
+        corte = (pd.Timestamp(ult) - timedelta(hours=horas)).isoformat()
+        q = ("SELECT ts, chuva_mm FROM leituras "
+             "WHERE ts >= ? AND chuva_mm IS NOT NULL")
+        args = [corte]
+        if fonte:
+            q += " AND fonte = ?"
+            args.append(fonte)
+        df = pd.read_sql_query(q + " ORDER BY ts", self.con, params=args)
+        if df.empty:
+            return None
+        df["ts"] = pd.to_datetime(df["ts"], utc=True).dt.tz_convert(FUSO)
+        fim = df["ts"].max()
+        ultima_hora = df[df["ts"] > fim - timedelta(hours=1)]["chuva_mm"].sum()
+        return {
+            "acum_mm": round(float(df["chuva_mm"].sum()), 1),
+            "mmh": round(float(ultima_hora), 1),
+            "horas_acum": horas,
+            "ts": fim,
+            "n_registros": len(df),
+        }
 
     def ultima_leitura(self):
         row = self.con.execute(

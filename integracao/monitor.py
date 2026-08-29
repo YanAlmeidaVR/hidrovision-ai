@@ -130,6 +130,7 @@ class Risco:
     motivos: list
     rio: dict | None = None
     regua: dict | None = None
+    local: dict | None = None
 
     def __str__(self):
         txt = f"[{self.nivel.upper()}] {self.titulo}"
@@ -139,7 +140,8 @@ class Risco:
 
 
 def avaliar_risco(prev_sem_chuva, prev_com_chuva, resumo_clima,
-                  nivel_regua=None, projecao_regua=None, nivel_rio_atual=None):
+                  nivel_regua=None, projecao_regua=None, nivel_rio_atual=None,
+                  chuva_local=None):
     """
     Combina a previsão do rio (bacia) com o estado da régua urbana.
 
@@ -218,6 +220,21 @@ def avaliar_risco(prev_sem_chuva, prev_com_chuva, resumo_clima,
         elif projecao_regua is not None and projecao_regua.estado == "descendo":
             motivos.append("água recuando na régua")
 
+    # ---------- camada 3: a chuva na própria cidade ----------
+    # Independente do rio: a água que cai aqui vai para a drenagem urbana e
+    # alaga rua antes de qualquer cheia chegar. Por isso não passa pelos
+    # modelos, que foram treinados com a chuva da bacia alta.
+    local = None
+    if chuva_local:
+        grau_local, motivo_local = C.avaliar_local(chuva_local)
+        local = dict(chuva_local)
+        local["grau"] = grau_local
+        if motivo_local:
+            escalas.append(grau_local)
+            motivos.append(motivo_local)
+        elif (chuva_local.get("mmh") or 0) >= 0.2:
+            motivos.append(C.descrever_local(chuva_local))
+
     ordem = ["normal", "atencao", "alerta", "emergencia"]
     nivel = max(escalas, key=ordem.index) if escalas else "normal"
     titulos = {
@@ -226,7 +243,7 @@ def avaliar_risco(prev_sem_chuva, prev_com_chuva, resumo_clima,
         "alerta": "Alerta: risco de inundação urbana",
         "emergencia": "EMERGÊNCIA: água prestes a atingir a área urbana",
     }
-    return Risco(nivel, titulos[nivel], motivos, rio, regua)
+    return Risco(nivel, titulos[nivel], motivos, rio, regua, local)
 
 
 # ----------------------------------------------------------------------
@@ -248,6 +265,9 @@ class Monitor:
         self._inicio_risco = None
         self.preditor = P.Preditor(pasta_modelos)
         self.clima = C.Clima(lat, lon)
+        # segunda leitura, na cidade: chuva observada agora, para o alerta
+        # local de alagamento urbano
+        self.clima_local = C.Clima(C.LAT_CIDADE, C.LON_CIDADE)
         self.horas_previsao = horas_previsao
         self.ana = (AnaAtual(ana_id, ana_senha)
                     if (ana_id and ana_senha) else None)
@@ -293,8 +313,13 @@ class Monitor:
                      .dropna(subset=["nivel_cm"]))
         n = 0
         for ts, row in horario.iterrows():
+            chuva = row.get("chuva_mm")
+            if chuva is not None and pd.isna(chuva):
+                chuva = None
             self.banco.gravar_leitura(float(row["nivel_cm"]), "estacao_ana",
-                                      ts=ts, fonte="ana", janela_mediana=1)
+                                      ts=ts, fonte="ana", janela_mediana=1,
+                                      chuva_mm=(None if chuva is None
+                                                else float(chuva)))
             n += 1
         return n
 
@@ -326,6 +351,28 @@ class Monitor:
             if verboso:
                 print("  [CLIMA] previsão do tempo indisponível neste ciclo")
 
+        # ---------- chuva local (não entra nos modelos do rio) ----------
+        # Preferência pelo pluviômetro da estação: é medição de instrumento e
+        # capta a pancada convectiva que um modelo em grade de quilômetros
+        # costuma reportar como zero. A previsão do Open-Meteo entra só como
+        # reserva, quando o serviço da ANA está fora ou sem dado de chuva.
+        local = None
+        medida = self.banco.chuva_recente(horas=6)
+        if medida:
+            local = {
+                "mmh": medida["mmh"],
+                "acum_mm": medida["acum_mm"],
+                "horas_acum": medida["horas_acum"],
+                "intensidade": C.classificar(medida["mmh"]),
+                "origem": "pluviômetro da estação",
+                "horario": f"{medida['ts']:%d/%m %H:%M}",
+            }
+        if local is None:
+            prevista = self.clima_local.agora()
+            if prevista:
+                prevista["origem"] = "previsão para a cidade"
+                local = prevista
+
         serie = self.banco.serie_horaria(horas=30 * 24, ate=agora)
         prev_sem = self.preditor.prever(serie)
         prev_com = None
@@ -335,7 +382,8 @@ class Monitor:
                 horas_de_chuva=min(self.horas_previsao, 24))
 
         risco = avaliar_risco(prev_sem, prev_com, resumo,
-                              nivel_regua, projecao_regua)
+                              nivel_regua, projecao_regua,
+                              chuva_local=local)
 
         # registra o ciclo para o dashboard montar o histórico
         self.banco.gravar_previsao(prev_sem, prev_com, resumo,
@@ -346,7 +394,9 @@ class Monitor:
         if verboso:
             print(f"\n{'='*70}\n{agora:%d/%m/%Y %H:%M}"
                   f"{f'  ({n_novas} leituras novas da ANA)' if n_novas else ''}")
-            print(f"  clima: {C.descrever(resumo)}")
+            print(f"  bacia alta (Maria da Fé): {C.descrever(resumo)}")
+            origem = (local or {}).get("origem", "sem fonte")
+            print(f"  chuva local ({origem}): {C.descrever_local(local)}")
             if prev_sem:
                 print(f"  rio agora: {prev_sem['nivel_atual']:.0f} cm")
                 for h in ("6h", "12h", "24h"):
