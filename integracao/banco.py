@@ -9,6 +9,8 @@ Duas tabelas:
 
 Regras embutidas:
   - filtro de mediana ANTES de gravar (outlier não entra no histórico);
+  - uma leitura por (timestamp, fonte): reconsultar o mesmo período na ANA
+    atualiza a linha em vez de duplicá-la;
   - agregação horária para alimentar o preditor (os modelos XGBoost foram
     treinados com dado horário — alimentar com dado de 30 s quebra os lags);
   - importação da série histórica da ANA para o mesmo banco (fonte única).
@@ -34,6 +36,10 @@ CREATE TABLE IF NOT EXISTS leituras (
     fonte TEXT DEFAULT 'camera'     -- 'camera' | 'ana'
 );
 CREATE INDEX IF NOT EXISTS idx_leituras_ts ON leituras(ts);
+-- uma leitura por instante e fonte. O monitor reconsulta os últimos dias a
+-- cada ciclo, e sem esta restrição a mesma hora entraria repetida, inflando
+-- a série e distorcendo o cálculo de tendência.
+CREATE UNIQUE INDEX IF NOT EXISTS ix_leituras_ts_fonte ON leituras(ts, fonte);
 
 CREATE TABLE IF NOT EXISTS alertas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,9 +77,34 @@ class Banco:
     def __init__(self, caminho=DB_PADRAO):
         self.caminho = caminho
         self.con = sqlite3.connect(caminho)
+        self._migrar()
         self.con.executescript(_SCHEMA)
         self.con.commit()
         self._buffer_mediana = []
+
+    def _migrar(self):
+        """
+        Bancos criados antes do índice único podem ter horas repetidas, e o
+        SQLite recusa criar a restrição sobre dados que já a violam. Remove as
+        duplicatas mantendo a linha mais recente de cada (ts, fonte).
+        """
+        try:
+            tem = self.con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='leituras'").fetchone()
+            if not tem:
+                return
+            ja_tem_indice = self.con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='index' "
+                "AND name='ix_leituras_ts_fonte'").fetchone()
+            if ja_tem_indice:
+                return
+            self.con.execute(
+                "DELETE FROM leituras WHERE rowid NOT IN "
+                "(SELECT MAX(rowid) FROM leituras GROUP BY ts, fonte)")
+            self.con.commit()
+        except sqlite3.Error:
+            pass
 
     def fechar(self):
         self.con.close()
@@ -88,6 +119,11 @@ class Banco:
         Grava uma leitura. O valor gravado é a MEDIANA das últimas
         `janela_mediana` leituras (incluindo esta), de modo que um outlier
         isolado não entra no histórico. Retorna o valor efetivamente gravado.
+
+        Regravar o mesmo (ts, fonte) substitui a linha anterior. É o que
+        permite ao monitor reconsultar os últimos dias a cada ciclo sem
+        duplicar a série: leitura provisória da ANA é sobrescrita pelo valor
+        consolidado quando a estação o publica.
         """
         if nivel_cm is None:
             return None
@@ -98,7 +134,7 @@ class Banco:
 
         ts = ts if ts is not None else _agora()
         self.con.execute(
-            "INSERT INTO leituras (ts, nivel_cm, metodo, confianca, "
+            "INSERT OR REPLACE INTO leituras (ts, nivel_cm, metodo, confianca, "
             "menor_numero, fonte) VALUES (?,?,?,?,?,?)",
             (pd.Timestamp(ts).isoformat(), valor, metodo, confianca,
              menor_numero, fonte))
@@ -235,9 +271,12 @@ class Banco:
         df = pd.read_csv(caminho_csv, parse_dates=["datahora"])
         df["datahora"] = pd.to_datetime(df["datahora"], utc=True).dt.tz_convert(FUSO)
         df = df.dropna(subset=["nivel_cm"])
+        # o CSV pode trazer a mesma hora repetida; mantém a última ocorrência
+        df = df.drop_duplicates(subset=["datahora"], keep="last")
         self.con.execute("DELETE FROM leituras WHERE fonte = ?", (fonte,))
         self.con.executemany(
-            "INSERT INTO leituras (ts, nivel_cm, metodo, fonte) VALUES (?,?,?,?)",
+            "INSERT OR REPLACE INTO leituras (ts, nivel_cm, metodo, fonte) "
+            "VALUES (?,?,?,?)",
             [(ts.isoformat(), float(n), "estacao_ana", fonte)
              for ts, n in zip(df["datahora"], df["nivel_cm"])])
         self.con.commit()

@@ -18,6 +18,7 @@ suavemente por dentro, mas o sistema recebe apenas o menor número visível.
     python demo_simulada.py --interpolada        # leitura fina (se a
                                                  # geometria funcionar bem)
     python demo_simulada.py --modo estacao --replay-ana dados_treino.csv
+    python demo_simulada.py --modo estacao --replay-ana dados_treino.csv --rapido
 """
 import argparse
 import os
@@ -113,37 +114,6 @@ def demo_maquete(p, rapido=False, interpolada=False):
         if not rapido:
             time.sleep(0.35)
 
-    print(f"\n{'-'*72}\nO que o dashboard mostraria agora:")
-    e = p.estado_atual()
-    ult = e["ultima_leitura"]["nivel_cm"]
-    if interpolada:
-        print(f"  nível: ~{ult:.0f} cm")
-    else:
-        print(f"  nível: entre {ult:.0f} e {ult+PASSO:.0f} cm "
-              f"(menor número visível: {ult:.0f})")
-    t = e["tendencia"]
-    print(f"  tendência: {t.rotulo} "
-          f"({t.taxa_cm_h:+.1f} cm/h)" if t.taxa_cm_h is not None
-          else f"  tendência: {t.rotulo}")
-    print(f"  resolução da leitura: {t.resolucao} — {t.detalhe}")
-    print(f"  modo: {e['modo']} | limiares: {e['limiares']}")
-    pj = e.get("projecao")
-    if pj is not None:
-        print(f"  {pj.resumo()}")
-        if pj.detalhe:
-            print(f"  ({pj.detalhe})")
-
-    print(f"\n{'-'*72}")
-    print("Como a projeção é calculada:")
-    print("  A régua fica junto à área urbana: 100 cm é o ponto em que a água")
-    print("  atinge a cidade. A projeção é uma extrapolação da tendência —")
-    print("  folga em cm dividida pela taxa em cm/h. Ela só se aplica enquanto o")
-    print("  nível sobe; se estabiliza ou recua, é cancelada.")
-    print("  Os modelos XGBoost não entram aqui: foram treinados na cota do rio")
-    print("  na estação 61305000 (14 a 447 cm), outra escala e outra física.")
-    print("  Eles são demonstrados com os dados reais da estação:")
-    print("      python demo_simulada.py --modo estacao --replay-ana dados_treino.csv")
-
     print(f"\n{'-'*72}\nAlertas gravados:")
     al = p.banco.alertas_recentes(10)
     if al.empty:
@@ -151,16 +121,34 @@ def demo_maquete(p, rapido=False, interpolada=False):
     else:
         for _, a in al.iloc[::-1].iterrows():
             print(f"  {a.ts:%H:%M}  {a.tipo:11s} {a.estado:10s} "
-                  f"{a.nivel_cm:5.0f} cm  [{a.origem}]")
+                  f"{a.nivel_cm:5.0f} cm")
 
 
-def demo_replay_ana(p, csv):
-    """Reproduz a cheia real de março/2026 da estação 61305000, hora a hora."""
-    print(f"\n{'='*72}")
+def _valor_previsao(prev, chave):
+    """Extrai um horizonte da previsão, tolerante ao formato do dicionário."""
+    if not prev:
+        return None
+    for k in (chave, f"{chave}h", f"t+{chave}", f"t+{chave}h"):
+        v = prev.get(k)
+        if isinstance(v, (int, float)):
+            return float(v)
+    return None
+
+
+def demo_replay_ana(p, csv, rapido=False, pausa=0.25):
+    """
+    Reproduz a cheia real de março/2026 da estação 61305000, hora a hora.
+
+    A cada hora imprime o nível observado, a tendência calculada e o nível que
+    os modelos XGBoost projetam para 6, 12 e 24 horas à frente. Os alertas
+    aparecem no meio da tabela, no instante em que disparam.
+    """
+    print(f"\n{'='*78}")
     print("REPLAY — cheia real de março/2026 (estação 61305000, dados da ANA)")
-    print(f"{'='*72}")
-    print("Aqui a leitura é de 1 cm: são os dados oficiais da estação, não a")
-    print("câmera. Serve para verificar o alerta antecipado em evento real.\n")
+    print(f"{'='*78}")
+    print("Leitura de 1 cm: são os dados oficiais da estação, não a câmera.")
+    print("Limiares desta estação: atenção 228 | alerta 304 | emergência 388 cm.")
+    print("As colunas de previsão trazem o nível projetado pelos modelos.\n")
 
     df = pd.read_csv(csv, parse_dates=["datahora"])
     df["datahora"] = pd.to_datetime(df["datahora"], utc=True).dt.tz_convert(B.FUSO)
@@ -176,31 +164,85 @@ def demo_replay_ana(p, csv):
                                ts=row["datahora"], janela_mediana=1)
     p._ultima_previsao_ts = None
 
-    primeiro_alerta, cruzou_de_fato = {}, {}
-    for _, row in trecho.iterrows():
-        r = p.processar_leitura(row["nivel_cm"], "replay", 1.0,
-                               ts=row["datahora"])
-        for estado, tipo, origem, valor in r.eventos_alerta:
-            if estado != "disparado":
-                continue
-            if origem.startswith("previsao") and tipo not in primeiro_alerta:
-                primeiro_alerta[tipo] = (row["datahora"], origem, valor)
-            if origem == "nivel_atual" and tipo not in cruzou_de_fato:
-                cruzou_de_fato[tipo] = (row["datahora"], row["nivel_cm"])
+    print(f"  {'data/hora':>13} {'nível':>9} {'tendência':>16} "
+          f"{'prev 6h':>10} {'prev 12h':>10} {'prev 24h':>10}")
+    print(f"  {'-'*13} {'-'*9} {'-'*16} {'-'*10} {'-'*10} {'-'*10}")
 
-    print(f"{len(trecho)} horas processadas.\n")
-    print("Antecedência do alerta (previsão vs. nível real cruzando o limiar):")
+    trajetoria, nivel_cruzou = {}, {}
+    pico_ts, pico_nivel = None, -1e9
+
+    for _, row in trecho.iterrows():
+        ts, nivel = row["datahora"], float(row["nivel_cm"])
+        r = p.processar_leitura(nivel, "replay", 1.0, ts=ts)
+
+        if nivel > pico_nivel:
+            pico_ts, pico_nivel = ts, nivel
+
+        if r.tendencia is not None and r.tendencia.taxa_cm_h is not None:
+            seta = getattr(r.tendencia, "seta", "")
+            tend = f"{r.tendencia.taxa_cm_h:+.1f} cm/h {seta}"
+        else:
+            tend = r.tendencia.rotulo if r.tendencia is not None else "--"
+
+        prev = getattr(r, "previsoes", None)
+        cols = []
+        for h in ("6", "12", "24"):
+            v = _valor_previsao(prev, h)
+            cols.append(f"{v:6.0f} cm" if v is not None else "      —")
+
+        print(f"  {ts:%d/%m %H:%M} {nivel:6.0f} cm {tend:>16} "
+              f"{cols[0]:>10} {cols[1]:>10} {cols[2]:>10}")
+
+        # os alertas do ciclo aparecem logo abaixo da linha que os gerou
+        for ev in r.eventos_alerta:
+            marca = ">>" if ev.estado in ("disparado", "agravado") else "--"
+            print(f"      {marca} {ev.mensagem}")
+            if ev.estado in ("disparado", "agravado"):
+                if ev.categoria == "trajetoria" and ev.tipo not in trajetoria:
+                    trajetoria[ev.tipo] = (ts, ev.valor)
+                if ev.categoria == "nivel" and ev.tipo not in nivel_cruzou:
+                    nivel_cruzou[ev.tipo] = (ts, nivel)
+
+        if not rapido:
+            time.sleep(pausa)
+
+    # ------------------------------------------------------------------
+    print(f"\n{'-'*78}")
+    print(f"{len(trecho)} horas processadas. "
+          f"Pico do evento: {pico_nivel:.0f} cm em {pico_ts:%d/%m %H:%M}.")
+
+    print(f"\n{'-'*78}")
+    print("Antecedência: alerta de TRAJETÓRIA vs. o nível cruzando o limiar")
+    houve = False
     for tipo in ("atencao", "alerta", "emergencia"):
-        if tipo in primeiro_alerta and tipo in cruzou_de_fato:
-            t_prev, origem, v_prev = primeiro_alerta[tipo]
-            t_real, v_real = cruzou_de_fato[tipo]
-            horas = (t_real - t_prev).total_seconds() / 3600
-            print(f"  {tipo:11s} avisado {t_prev:%d/%m %H:%M} ({origem}, "
-                  f"{v_prev:.0f} cm) | cruzou {t_real:%d/%m %H:%M} "
+        if tipo in trajetoria and tipo in nivel_cruzou:
+            t_traj, v_traj = trajetoria[tipo]
+            t_real, v_real = nivel_cruzou[tipo]
+            horas = (t_real - t_traj).total_seconds() / 3600
+            print(f"  {tipo:11s} trajetória avisou {t_traj:%d/%m %H:%M} "
+                  f"({v_traj:.0f} cm) | nível cruzou {t_real:%d/%m %H:%M} "
                   f"({v_real:.0f} cm) -> {horas:+.0f} h de antecedência")
-        elif tipo in cruzou_de_fato:
-            t_real, v_real = cruzou_de_fato[tipo]
-            print(f"  {tipo:11s} cruzou {t_real:%d/%m %H:%M} sem aviso prévio")
+            houve = True
+        elif tipo in nivel_cruzou:
+            t_real, v_real = nivel_cruzou[tipo]
+            print(f"  {tipo:11s} nível cruzou {t_real:%d/%m %H:%M} "
+                  f"({v_real:.0f} cm), sem aviso prévio de trajetória")
+            houve = True
+    if not houve:
+        print("  nenhum alerta disparado no período")
+    print("\n  Nesta estação o nível crítico é 447 cm e o rio subiu devagar, então")
+    print("  o tempo projetado ficou acima do horizonte de 24 h e a trajetória")
+    print("  não entrou em faixa de urgência. É o comportamento esperado: a")
+    print("  extrapolação só alerta quando a subida é rápida o bastante.")
+
+    print(f"\n{'-'*78}\nAlertas gravados no período:")
+    al = p.banco.alertas_recentes(20)
+    if al.empty:
+        print("  nenhum")
+    else:
+        for _, a in al.iloc[::-1].iterrows():
+            print(f"  {a.ts:%d/%m %H:%M}  {a.tipo:11s} {a.estado:11s} "
+                  f"{a.nivel_cm:6.0f} cm")
 
 
 if __name__ == "__main__":
@@ -213,7 +255,10 @@ if __name__ == "__main__":
                     help="reproduz a cheia real de mar/2026 desse CSV")
     ap.add_argument("--interpolada", action="store_true",
                     help="simula leitura fina em vez de degraus de 10 cm")
-    ap.add_argument("--rapido", action="store_true")
+    ap.add_argument("--rapido", action="store_true",
+                    help="sem pausa entre as linhas")
+    ap.add_argument("--pausa", type=float, default=0.25,
+                    help="segundos entre as linhas do replay (padrão 0,25)")
     args = ap.parse_args()
 
     if os.path.exists(args.db):
@@ -221,6 +266,7 @@ if __name__ == "__main__":
     p = PL.Pipeline(modo=args.modo, db=args.db, pasta_modelos=args.modelos,
                     prever_a_cada_min=0)
     if args.replay_ana:
-        demo_replay_ana(p, args.replay_ana)
+        demo_replay_ana(p, args.replay_ana, rapido=args.rapido,
+                        pausa=args.pausa)
     else:
         demo_maquete(p, rapido=args.rapido, interpolada=args.interpolada)
