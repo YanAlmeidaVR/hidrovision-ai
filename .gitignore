@@ -17,7 +17,8 @@ runs/
 weights/
 *.onnx
 *.tflite
-
+# exceção: modelo quantizado que roda no Raspberry Pi (2,75 MB)
+!visao/hidrovision_v05_w8a32.tflite
 # ---------- credenciais ----------
 .env
 *.key
@@ -38,6 +39,3 @@ env/
 Thumbs.db
 Desktop.ini
 .DS_Store
-
-# excecao: modelo quantizado que roda no Raspberry Pi (2,75 MB)
-!visao/hidrovision_v05_w8a32.tflite

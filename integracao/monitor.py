@@ -37,6 +37,10 @@ ESTACAO_ANA = "61305000"
 ANA_BASE = "https://www.ana.gov.br/hidrowebservice"
 
 
+class AnaForaDoAr(Exception):
+    """O serviço da ANA não respondeu. Não é falha do sistema local."""
+
+
 # ----------------------------------------------------------------------
 # consulta do nível atual na ANA
 # ----------------------------------------------------------------------
@@ -69,7 +73,10 @@ class AnaAtual:
 
         O servidor da ANA devolve 502/503/504 com alguma frequência. Como uma
         falha pode cair justamente no ciclo do evento crítico, a consulta é
-        repetida com espera crescente antes de desistir.
+        repetida com espera crescente antes de desistir. As tentativas são
+        silenciosas: se todas falharem, o ciclo emite um único aviso de que o
+        serviço está fora do ar — repetir a mesma informação três vezes só
+        polui o log de operação.
         """
         import requests
         dia = dia or pd.Timestamp.now(tz=B.FUSO).date()
@@ -89,18 +96,16 @@ class AnaAtual:
                     continue
                 if r.status_code >= 500:
                     if n < tentativas:
-                        print(f"  [ANA] HTTP {r.status_code}, tentativa "
-                              f"{n}/{tentativas}; nova tentativa em {5*n}s")
                         time.sleep(5 * n)
                         continue
-                    r.raise_for_status()
+                    raise AnaForaDoAr(f"HTTP {r.status_code}")
                 r.raise_for_status()
                 break
-            except requests.exceptions.RequestException as e:
+            except AnaForaDoAr:
+                raise
+            except requests.exceptions.RequestException:
                 if n >= tentativas:
-                    raise
-                print(f"  [ANA] {type(e).__name__}, tentativa {n}/{tentativas}; "
-                      f"nova tentativa em {5*n}s")
+                    raise AnaForaDoAr("sem resposta do servidor")
                 time.sleep(5 * n)
         itens = r.json().get("items") or []
         if not itens:
@@ -217,9 +222,9 @@ def avaliar_risco(prev_sem_chuva, prev_com_chuva, resumo_clima,
     nivel = max(escalas, key=ordem.index) if escalas else "normal"
     titulos = {
         "normal": "Situação normal",
-        "atencao": "Atenção — condições em evolução",
-        "alerta": "Alerta — risco de inundação urbana",
-        "emergencia": "EMERGÊNCIA — água prestes a atingir a área urbana",
+        "atencao": "Atenção: condições em evolução",
+        "alerta": "Alerta: risco de inundação urbana",
+        "emergencia": "EMERGÊNCIA: água prestes a atingir a área urbana",
     }
     return Risco(nivel, titulos[nivel], motivos, rio, regua)
 
@@ -231,7 +236,7 @@ class Monitor:
     def __init__(self, db="hidrovision.db", pasta_modelos=".",
                  ana_id=None, ana_senha=None, horas_previsao=24,
                  lat=C.LAT_BACIA, lon=C.LON_BACIA, notificar=True,
-                 lembrete_horas=6):
+                 lembrete_horas=6, dias_historico=3):
         self.banco = B.Banco(db)
         # canais de notificação: console, arquivo e Telegram (se configurado)
         self.canais = A.canais_padrao() if notificar else []
@@ -246,15 +251,41 @@ class Monitor:
         self.horas_previsao = horas_previsao
         self.ana = (AnaAtual(ana_id, ana_senha)
                     if (ana_id and ana_senha) else None)
+        # quantos dias de leitura buscar na ANA a cada ciclo
+        self.dias_historico = dias_historico
+        # evita repetir o aviso de indisponibilidade a cada ciclo
+        self._ana_fora = False
 
     # ------------------------------------------------------------------
-    def atualizar_rio(self):
-        """Busca o nível do dia na ANA e grava as leituras novas."""
+    def atualizar_rio(self, dias=None):
+        """
+        Busca o nível dos últimos dias na ANA e grava as leituras novas.
+
+        Buscar só o dia corrente deixaria a série curta demais de manhã: às
+        08h existiriam oito leituras horárias, e a tendência precisa de mais
+        que isso. Varrendo alguns dias para trás, o primeiro ciclo já entrega
+        série suficiente para tendência e para as defasagens do preditor.
+        Reescrever a mesma hora é inofensivo: o banco grava por timestamp.
+        """
         if self.ana is None:
             return 0
-        df = self.ana.leituras_do_dia()
-        if df.empty:
+        dias = dias or self.dias_historico
+        hoje = pd.Timestamp.now(tz=B.FUSO).date()
+        partes = []
+        for d in range(dias - 1, -1, -1):
+            try:
+                df = self.ana.leituras_do_dia(hoje - pd.Timedelta(days=d))
+            except AnaForaDoAr:
+                # se um dia falhar, segue com os que vieram; só propaga o
+                # erro quando nenhum dia foi obtido
+                if d == 0 and not partes:
+                    raise
+                continue
+            if not df.empty:
+                partes.append(df)
+        if not partes:
             return 0
+        df = pd.concat(partes).sort_values("datahora")
         # agrega para hora (o preditor espera base horária)
         horario = (df.set_index("datahora")
                      .resample("1h")
@@ -272,18 +303,28 @@ class Monitor:
         agora = pd.Timestamp.now(tz=B.FUSO)
 
         n_novas = 0
+        ana_ok = True
         try:
             n_novas = self.atualizar_rio()
+            if self._ana_fora and verboso:
+                print("  [ANA] serviço restabelecido")
+            self._ana_fora = False
+        except AnaForaDoAr:
+            ana_ok = False
+            if verboso and not self._ana_fora:
+                print("  [ANA] SERVIÇO FORA DO AR — ciclo sem leitura de nível")
+            self._ana_fora = True
         except Exception as e:
+            ana_ok = False
             if verboso:
-                print(f"  [aviso] ANA indisponível: {e}")
+                print(f"  [ANA] falha na consulta: {e}")
 
         resumo = None
         try:
             resumo = self.clima.resumo(self.horas_previsao)
-        except Exception as e:
+        except Exception:
             if verboso:
-                print(f"  [aviso] previsão do tempo indisponível: {e}")
+                print("  [CLIMA] previsão do tempo indisponível neste ciclo")
 
         serie = self.banco.serie_horaria(horas=30 * 24, ate=agora)
         prev_sem = self.preditor.prever(serie)
@@ -315,7 +356,15 @@ class Monitor:
                         if prev_com and h in prev_com:
                             linha += f"   |  com a chuva prevista: {prev_com[h]:6.0f} cm"
                         print(linha)
+            elif not ana_ok:
+                print("  rio: sem dado, a fonte de nível está indisponível")
+            else:
+                motivo = getattr(self.preditor, "motivo", None)
+                print(f"  rio: sem previsão ({motivo})" if motivo
+                      else "  rio: sem previsão neste ciclo")
             print(f"\n{risco}")
+            if not ana_ok:
+                print("   ! avaliação feita sem o nível do rio")
         return risco, (prev_com or prev_sem), resumo
 
     def _notificar(self, risco, prev_sem, prev_com, resumo, agora=None):
@@ -401,12 +450,15 @@ if __name__ == "__main__":
                     help="repetir alerta ativo a cada N horas (0 desativa)")
     ap.add_argument("--ana-id", default=os.environ.get("ANA_ID"))
     ap.add_argument("--ana-senha", default=os.environ.get("ANA_SENHA"))
+    ap.add_argument("--dias", type=int, default=3,
+                    help="quantos dias de leitura buscar na ANA por ciclo")
     ap.add_argument("--importar", metavar="CSV",
                     help="popula o banco com o histórico antes de começar")
     args = ap.parse_args()
 
     m = Monitor(args.db, args.modelos, args.ana_id, args.ana_senha,
-                args.horas_previsao, lembrete_horas=args.lembrete)
+                args.horas_previsao, lembrete_horas=args.lembrete,
+                dias_historico=args.dias)
     if args.importar:
         n = m.banco.importar_csv_ana(args.importar)
         print(f"{n} horas históricas importadas de {args.importar}")

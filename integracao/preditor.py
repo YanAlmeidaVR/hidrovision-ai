@@ -16,6 +16,11 @@ import xgboost as xgb
 
 HORIZONTES = (6, 12, 24)
 
+# Quantas horas de atraso são toleradas entre o fim da série e a última linha
+# de features completa. Três horas cobrem uma falha pontual de telemetria sem
+# deixar o sistema prever a partir de dado velho.
+TOLERANCIA_H = 3
+
 
 def _construir_features(df):
     """
@@ -65,15 +70,45 @@ class Preditor:
                 f"nenhum modelo_delta_*.json encontrado em {pasta_modelos}")
         # ordem exata das features que o modelo espera
         self.feats = self.modelos[list(self.modelos)[0]].get_booster().feature_names
+        # por que a última previsão falhou, para o monitor e o dashboard
+        # poderem dizer ao operador em vez de só omitir o número
+        self.motivo = None
 
     # ------------------------------------------------------------------
-    def _linha_atual(self, serie_horaria):
-        """Última linha de features completa da série horária do banco."""
+    def _linha_atual(self, serie_horaria, tolerancia_h=TOLERANCIA_H):
+        """
+        Última linha de features COMPLETA e RECENTE da série do banco.
+
+        As features usam defasagens de até 24 h, então o dropna() descarta as
+        horas do fim sempre que o histórico contíguo é curto. Pegar
+        simplesmente a última linha que sobrou seria perigoso: quando a série
+        tem uma lacuna (telemetria fora do ar, banco recém-populado com
+        histórico antigo), a última linha completa pode ser de semanas atrás,
+        e o resultado apareceria no painel como o nível de agora.
+
+        Por isso a linha só é aceita se estiver a no máximo `tolerancia_h`
+        horas do fim da série. Não prever é melhor que prever a partir de
+        dado velho: o operador percebe a ausência, mas não perceberia um
+        número plausível e errado.
+        """
+        self.motivo = None
         if serie_horaria is None or serie_horaria.empty:
+            self.motivo = "sem série no banco"
             return None
         X = _construir_features(serie_horaria)
         X = X[self.feats].dropna()
         if X.empty:
+            self.motivo = ("histórico contíguo insuficiente: as features "
+                           "precisam de 25 h seguidas de leitura")
+            return None
+        fim_serie = serie_horaria.index.max()
+        fim_features = X.index[-1]
+        atraso_h = (fim_serie - fim_features).total_seconds() / 3600
+        if atraso_h > tolerancia_h:
+            self.motivo = (
+                f"última janela completa é de {fim_features:%d/%m %H:%M}, "
+                f"{atraso_h:.0f} h atrás do fim da série — a leitura recente "
+                f"não tem 25 h contíguas para as defasagens")
             return None
         return X.iloc[-1]
 
@@ -81,7 +116,8 @@ class Preditor:
         """
         serie_horaria: saída de Banco.serie_horaria() (>= 25 h de dados).
         Retorna {'nivel_atual': x, '6h': y, '12h': z, '24h': w} em cm,
-        ou None se não houver histórico suficiente.
+        ou None se não houver histórico recente e suficiente. Quando devolve
+        None, `self.motivo` explica o porquê.
         """
         linha = self._linha_atual(serie_horaria)
         if linha is None:
