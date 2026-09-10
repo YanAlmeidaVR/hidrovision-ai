@@ -352,14 +352,27 @@ class Monitor:
                 print("  [CLIMA] previsão do tempo indisponível neste ciclo")
 
         # ---------- chuva local (não entra nos modelos do rio) ----------
-        # Preferência pelo pluviômetro da estação: é medição de instrumento e
-        # capta a pancada convectiva que um modelo em grade de quilômetros
-        # costuma reportar como zero. A previsão do Open-Meteo entra só como
-        # reserva, quando o serviço da ANA está fora ou sem dado de chuva.
-        local = None
+        # Duas fontes, e nenhuma delas basta sozinha:
+        #
+        #   Open-Meteo em Santa Rita  aponta para a área urbana, que é onde a
+        #       chuva alaga rua. Mas é modelo numérico em grade de
+        #       quilômetros, e suaviza a pancada convectiva pontual.
+        #   Pluviômetro da estação    é medição de instrumento, mas fica no
+        #       rio, não na cidade. Chuva convectiva pode cair no bairro e não
+        #       tocar a estação.
+        #
+        # Em testes as duas se contradisseram nos dois sentidos: num dia a
+        # estação mediu 0,2 mm com o modelo em zero; no outro o modelo deu
+        # 1,1 mm/h com a estação zerada. Por isso o sistema usa a da cidade
+        # para decidir e guarda as duas para exibição: esconder a divergência
+        # seria fingir uma certeza que não existe.
+        local = self.clima_local.agora()
+        if local:
+            local["origem"] = "Open-Meteo, área urbana"
+
         medida = self.banco.chuva_recente(horas=6)
         if medida:
-            local = {
+            estacao = {
                 "mmh": medida["mmh"],
                 "acum_mm": medida["acum_mm"],
                 "horas_acum": medida["horas_acum"],
@@ -367,11 +380,10 @@ class Monitor:
                 "origem": "pluviômetro da estação",
                 "horario": f"{medida['ts']:%d/%m %H:%M}",
             }
-        if local is None:
-            prevista = self.clima_local.agora()
-            if prevista:
-                prevista["origem"] = "previsão para a cidade"
-                local = prevista
+            if local is None:
+                local = estacao          # sem a previsão, vale a medição
+            else:
+                local["estacao"] = estacao
 
         serie = self.banco.serie_horaria(horas=30 * 24, ate=agora)
         prev_sem = self.preditor.prever(serie)
@@ -396,16 +408,22 @@ class Monitor:
                   f"{f'  ({n_novas} leituras novas da ANA)' if n_novas else ''}")
             print(f"  bacia alta (Maria da Fé): {C.descrever(resumo)}")
             origem = (local or {}).get("origem", "sem fonte")
-            print(f"  chuva local ({origem}): {C.descrever_local(local)}")
+            print(f"  chuva na cidade ({origem}): {C.descrever_local(local)}")
+            est = (local or {}).get("estacao")
+            if est and abs((est.get("mmh") or 0)
+                           - (local.get("mmh") or 0)) >= 0.2:
+                print(f"  chuva na estação (pluviômetro): "
+                      f"{C.descrever_local(est)}")
             if prev_sem:
+                # A previsão exibida já considera a chuva OBSERVADA: ela entra
+                # pela série do banco, nos acumulados de 3 a 72 h. O cenário
+                # com a chuva ainda prevista continua sendo calculado e
+                # gravado, e aparece no painel de simulação; aqui fica de fora
+                # para não confundir o observado com a hipótese.
                 print(f"  rio agora: {prev_sem['nivel_atual']:.0f} cm")
                 for h in ("6h", "12h", "24h"):
                     if h in prev_sem:
-                        s = prev_sem[h]
-                        linha = f"    {h:>4}: {s:6.0f} cm"
-                        if prev_com and h in prev_com:
-                            linha += f"   |  com a chuva prevista: {prev_com[h]:6.0f} cm"
-                        print(linha)
+                        print(f"    {h:>4}: {prev_sem[h]:6.0f} cm")
             elif not ana_ok:
                 print("  rio: sem dado, a fonte de nível está indisponível")
             else:
