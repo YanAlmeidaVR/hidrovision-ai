@@ -185,24 +185,39 @@ class Banco:
 
     def serie_horaria(self, horas=27 * 24, ate=None):
         """
-        Série agregada em base HORÁRIA (média das leituras de cada hora),
-        no formato que o features.py espera: index datahora, coluna nivel_cm.
-        É esta função que alimenta o preditor.
+        Série agregada em base HORÁRIA, no formato que o preditor espera:
+        index datahora, colunas nivel_cm e chuva_mm.
+
+        As duas colunas importam. O modelo usa acumulados de chuva de 3 a 72 h,
+        e a chuva responde por boa parte da resposta nos horizontes longos.
+        Devolver só o nível faria o construtor de variáveis preencher a chuva
+        com zero, e o modelo passaria a prever como se nunca chovesse — sem
+        erro visível, porque a saída continua plausível.
+
+        Nível é média da hora; chuva é soma, porque uma é estado e a outra é
+        acumulação.
         """
         fim = pd.Timestamp(ate).tz_convert(FUSO) if ate is not None else _agora()
         ini = fim - timedelta(hours=horas)
         df = pd.read_sql_query(
-            "SELECT ts, nivel_cm FROM leituras WHERE ts >= ? AND ts <= ? ORDER BY ts",
+            "SELECT ts, nivel_cm, chuva_mm FROM leituras "
+            "WHERE ts >= ? AND ts <= ? ORDER BY ts",
             self.con, params=[ini.isoformat(), fim.isoformat()])
         if df.empty:
-            return pd.DataFrame(columns=["nivel_cm"])
+            return pd.DataFrame(columns=["nivel_cm", "chuva_mm"])
         df["ts"] = pd.to_datetime(df["ts"], utc=True).dt.tz_convert(FUSO)
-        serie = (df.set_index("ts")["nivel_cm"]
-                   .resample("1h").mean())
-        # grade contínua (buracos ficam NaN — o features.py sabe lidar)
+        g = df.set_index("ts").resample("1h")
+        serie = pd.DataFrame({
+            "nivel_cm": g["nivel_cm"].mean(),
+            "chuva_mm": g["chuva_mm"].sum(min_count=1),
+        })
+        # grade contínua (buracos no nível ficam NaN; o construtor sabe lidar)
         grade = pd.date_range(serie.index.min(), serie.index.max(),
                               freq="1h", tz=FUSO)
-        out = serie.reindex(grade).to_frame("nivel_cm")
+        out = serie.reindex(grade)
+        # hora sem registro de chuva é hora sem chuva medida, não hora com
+        # chuva desconhecida: o pluviômetro reporta zero quando não chove
+        out["chuva_mm"] = out["chuva_mm"].fillna(0.0)
         out.index.name = "datahora"
         return out
 
@@ -325,11 +340,20 @@ class Banco:
         df = df.dropna(subset=["nivel_cm"])
         # o CSV pode trazer a mesma hora repetida; mantém a última ocorrência
         df = df.drop_duplicates(subset=["datahora"], keep="last")
+
+        # o dataset de treino traz a chuva; sem ela, o histórico importado
+        # entraria no modelo como período seco
+        col_chuva = next((c for c in ("chuva_mm", "chuva", "precipitacao")
+                          if c in df.columns), None)
+        chuvas = (df[col_chuva].tolist() if col_chuva
+                  else [None] * len(df))
+
         self.con.execute("DELETE FROM leituras WHERE fonte = ?", (fonte,))
         self.con.executemany(
-            "INSERT OR REPLACE INTO leituras (ts, nivel_cm, metodo, fonte) "
-            "VALUES (?,?,?,?)",
-            [(ts.isoformat(), float(n), "estacao_ana", fonte)
-             for ts, n in zip(df["datahora"], df["nivel_cm"])])
+            "INSERT OR REPLACE INTO leituras "
+            "(ts, nivel_cm, metodo, fonte, chuva_mm) VALUES (?,?,?,?,?)",
+            [(ts.isoformat(), float(n), "estacao_ana", fonte,
+              (None if c is None or pd.isna(c) else float(c)))
+             for ts, n, c in zip(df["datahora"], df["nivel_cm"], chuvas)])
         self.con.commit()
         return len(df)
