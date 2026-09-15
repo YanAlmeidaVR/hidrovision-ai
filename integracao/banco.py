@@ -1,20 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-banco.py — HidroVision AI (Fase 3)
-Camada de dados em SQLite: leituras da câmera, série horária e alertas.
-
-Duas tabelas:
-  leituras : cada leitura da câmera (a cada 30-60 s)
-  alertas  : histórico de disparos/rearmes
-
-Regras embutidas:
-  - filtro de mediana ANTES de gravar (outlier não entra no histórico);
-  - uma leitura por (timestamp, fonte): reconsultar o mesmo período na ANA
-    atualiza a linha em vez de duplicá-la;
-  - agregação horária para alimentar o preditor (os modelos XGBoost foram
-    treinados com dado horário — alimentar com dado de 30 s quebra os lags);
-  - importação da série histórica da ANA para o mesmo banco (fonte única).
-"""
 import os
 import sqlite3
 from datetime import datetime, timezone, timedelta
@@ -28,49 +11,112 @@ DB_PADRAO = "hidrovision.db"
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS leituras (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts TEXT NOT NULL,               -- ISO 8601 com fuso
+    ts TEXT NOT NULL,
     nivel_cm REAL NOT NULL,
     metodo TEXT,
     confianca REAL,
     menor_numero INTEGER,
-    fonte TEXT DEFAULT 'camera',    -- 'camera' | 'ana'
-    chuva_mm REAL                   -- pluviômetro da estação, quando houver
+    fonte TEXT DEFAULT 'camera',
+    chuva_mm REAL
 );
 CREATE INDEX IF NOT EXISTS idx_leituras_ts ON leituras(ts);
--- uma leitura por instante e fonte. O monitor reconsulta os últimos dias a
--- cada ciclo, e sem esta restrição a mesma hora entraria repetida, inflando
--- a série e distorcendo o cálculo de tendência.
 CREATE UNIQUE INDEX IF NOT EXISTS ix_leituras_ts_fonte ON leituras(ts, fonte);
+CREATE INDEX IF NOT EXISTS idx_leituras_epoch_fonte
+    ON leituras(fonte, strftime('%s', ts));
 
 CREATE TABLE IF NOT EXISTS alertas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT NOT NULL,
-    tipo TEXT NOT NULL,             -- 'atencao' | 'alerta' | 'emergencia'
-    estado TEXT NOT NULL,           -- 'disparado' | 'rearmado'
+    tipo TEXT NOT NULL,
+    estado TEXT NOT NULL,
     nivel_cm REAL,
-    origem TEXT,                    -- 'nivel_atual' | 'previsao_6h' | ...
+    origem TEXT,
     mensagem TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_alertas_ts ON alertas(ts);
 
 CREATE TABLE IF NOT EXISTS previsoes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts TEXT NOT NULL,               -- instante em que a previsão foi feita
+    ts TEXT NOT NULL,
     nivel_atual REAL,
-    prev_6h REAL, prev_12h REAL, prev_24h REAL,             -- sem chuva nova
+    prev_6h REAL, prev_12h REAL, prev_24h REAL,
     prev_6h_chuva REAL, prev_12h_chuva REAL, prev_24h_chuva REAL,
-    chuva_total_mm REAL,            -- previsão meteorológica do momento
+    chuva_total_mm REAL,
     chuva_media_mmh REAL,
     chuva_pico_mmh REAL,
     chuva_prob_max INTEGER,
-    risco TEXT
+    risco TEXT,
+    ana_ultima_leitura TEXT,
+    ana_horas_novas INTEGER,
+    ana_fora_do_ar INTEGER,
+    bacia_horas_previstas INTEGER,
+    bacia_horas_chuva INTEGER,
+    cidade_mmh REAL,
+    cidade_acum6h REAL,
+    estacao_mmh REAL,
+    estacao_acum6h REAL,
+    risco_motivos TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_previsoes_ts ON previsoes(ts);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_previsoes_ts_unico ON previsoes(ts);
+"""
+
+_VIEW_ERRO = """
+CREATE VIEW previsoes_erro AS
+WITH alvo AS (
+    SELECT ts AS ts_ciclo, 6 AS horizonte, datetime(ts, '+6 hours') AS ts_alvo,
+           nivel_atual, prev_6h AS previsto_sem_chuva,
+           prev_6h_chuva AS previsto_com_chuva
+    FROM previsoes
+    UNION ALL
+    SELECT ts, 12, datetime(ts, '+12 hours'), nivel_atual, prev_12h, prev_12h_chuva
+    FROM previsoes
+    UNION ALL
+    SELECT ts, 24, datetime(ts, '+24 hours'), nivel_atual, prev_24h, prev_24h_chuva
+    FROM previsoes
+),
+cand AS (
+    SELECT a.*,
+        (SELECT ts FROM leituras
+         WHERE fonte = 'ana' AND strftime('%s', ts) <= strftime('%s', a.ts_alvo)
+         ORDER BY strftime('%s', ts) DESC LIMIT 1) AS ts_antes,
+        (SELECT ts FROM leituras
+         WHERE fonte = 'ana' AND strftime('%s', ts) >= strftime('%s', a.ts_alvo)
+         ORDER BY strftime('%s', ts) ASC LIMIT 1) AS ts_depois
+    FROM alvo a
+),
+casado AS (
+    SELECT c.*, o.nivel_cm AS observado_bruto, o.ts AS ts_observado_bruto,
+        (o.ts IS NOT NULL
+         AND ABS(strftime('%s', o.ts) - strftime('%s', c.ts_alvo)) <= 3600
+        ) AS dentro_tolerancia
+    FROM cand c
+    LEFT JOIN leituras o ON o.fonte = 'ana' AND o.ts = (
+        CASE
+            WHEN c.ts_antes IS NULL THEN c.ts_depois
+            WHEN c.ts_depois IS NULL THEN c.ts_antes
+            WHEN ABS(strftime('%s', c.ts_alvo) - strftime('%s', c.ts_antes))
+                 <= ABS(strftime('%s', c.ts_depois) - strftime('%s', c.ts_alvo))
+            THEN c.ts_antes ELSE c.ts_depois
+        END)
+)
+SELECT ts_ciclo, horizonte, ts_alvo, previsto_sem_chuva, previsto_com_chuva,
+       CASE WHEN dentro_tolerancia THEN observado_bruto END AS observado,
+       CASE WHEN dentro_tolerancia THEN ts_observado_bruto END AS ts_observado,
+       CASE WHEN dentro_tolerancia
+            THEN ROUND(previsto_sem_chuva - observado_bruto, 2) END
+            AS erro_sem_chuva_cm,
+       CASE WHEN dentro_tolerancia
+            THEN ROUND(previsto_com_chuva - observado_bruto, 2) END
+            AS erro_com_chuva_cm,
+       CASE WHEN dentro_tolerancia
+            THEN ROUND(nivel_atual - observado_bruto, 2) END
+            AS erro_persistencia_cm
+FROM casado
 """
 
 
 def _agora():
-    """Timestamp atual no fuso do projeto."""
     return pd.Timestamp.now(tz=FUSO)
 
 
@@ -80,17 +126,12 @@ class Banco:
         self.con = sqlite3.connect(caminho)
         self._migrar()
         self.con.executescript(_SCHEMA)
+        self.con.execute("DROP VIEW IF EXISTS previsoes_erro")
+        self.con.executescript(_VIEW_ERRO)
         self.con.commit()
         self._buffer_mediana = []
 
     def _migrar(self):
-        """
-        Ajusta bancos criados por versões anteriores.
-
-        Cada passo é independente e tolerante: um banco pode já ter o índice
-        único e ainda não ter a coluna de chuva, ou o contrário. Encadear os
-        passos com saída antecipada faria um deles pular o outro.
-        """
         try:
             tem = self.con.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' "
@@ -98,9 +139,8 @@ class Banco:
         except sqlite3.Error:
             return
         if not tem:
-            return          # banco novo: o _SCHEMA cria tudo já correto
+            return
 
-        # 1. horas repetidas impedem o índice único de ser criado
         try:
             ja_tem_indice = self.con.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='index' "
@@ -113,7 +153,6 @@ class Banco:
         except sqlite3.Error:
             pass
 
-        # 2. coluna de chuva do pluviômetro da estação
         try:
             cols = [c[1] for c in
                     self.con.execute("PRAGMA table_info(leituras)").fetchall()]
@@ -123,25 +162,48 @@ class Banco:
         except sqlite3.Error:
             pass
 
+        try:
+            tem_previsoes = self.con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='previsoes'").fetchone()
+            if tem_previsoes:
+                cols = [c[1] for c in
+                        self.con.execute("PRAGMA table_info(previsoes)").fetchall()]
+                novas = {
+                    "ana_ultima_leitura": "TEXT",
+                    "ana_horas_novas": "INTEGER",
+                    "ana_fora_do_ar": "INTEGER",
+                    "bacia_horas_previstas": "INTEGER",
+                    "bacia_horas_chuva": "INTEGER",
+                    "cidade_mmh": "REAL",
+                    "cidade_acum6h": "REAL",
+                    "estacao_mmh": "REAL",
+                    "estacao_acum6h": "REAL",
+                    "risco_motivos": "TEXT",
+                }
+                for nome, tipo in novas.items():
+                    if nome not in cols:
+                        self.con.execute(
+                            f"ALTER TABLE previsoes ADD COLUMN {nome} {tipo}")
+                self.con.commit()
+
+                ja_tem_indice_prev = self.con.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='index' "
+                    "AND name='ix_previsoes_ts_unico'").fetchone()
+                if not ja_tem_indice_prev:
+                    self.con.execute(
+                        "DELETE FROM previsoes WHERE rowid NOT IN "
+                        "(SELECT MAX(rowid) FROM previsoes GROUP BY ts)")
+                    self.con.commit()
+        except sqlite3.Error:
+            pass
+
     def fechar(self):
         self.con.close()
 
-    # ------------------------------------------------------------------
-    # gravação de leituras (com filtro de mediana embutido)
-    # ------------------------------------------------------------------
     def gravar_leitura(self, nivel_cm, metodo="", confianca=None,
                        menor_numero=None, ts=None, janela_mediana=3,
                        fonte="camera", chuva_mm=None):
-        """
-        Grava uma leitura. O valor gravado é a MEDIANA das últimas
-        `janela_mediana` leituras (incluindo esta), de modo que um outlier
-        isolado não entra no histórico. Retorna o valor efetivamente gravado.
-
-        Regravar o mesmo (ts, fonte) substitui a linha anterior. É o que
-        permite ao monitor reconsultar os últimos dias a cada ciclo sem
-        duplicar a série: leitura provisória da ANA é sobrescrita pelo valor
-        consolidado quando a estação o publica.
-        """
         if nivel_cm is None:
             return None
         self._buffer_mediana.append(float(nivel_cm))
@@ -158,15 +220,7 @@ class Banco:
         self.con.commit()
         return valor
 
-    # ------------------------------------------------------------------
-    # consultas
-    # ------------------------------------------------------------------
     def serie_recente(self, horas=48, fonte=None):
-        """
-        Leituras cruas das últimas N horas -> DataFrame [ts, nivel_cm, ...].
-        A janela é ancorada na ÚLTIMA LEITURA, não no relógio de parede —
-        assim funciona igual em operação, replay e simulação.
-        """
         ult = self.con.execute("SELECT MAX(ts) FROM leituras").fetchone()[0]
         if ult is None:
             return pd.DataFrame(columns=["ts", "nivel_cm", "metodo",
@@ -184,19 +238,6 @@ class Banco:
         return df
 
     def serie_horaria(self, horas=27 * 24, ate=None):
-        """
-        Série agregada em base HORÁRIA, no formato que o preditor espera:
-        index datahora, colunas nivel_cm e chuva_mm.
-
-        As duas colunas importam. O modelo usa acumulados de chuva de 3 a 72 h,
-        e a chuva responde por boa parte da resposta nos horizontes longos.
-        Devolver só o nível faria o construtor de variáveis preencher a chuva
-        com zero, e o modelo passaria a prever como se nunca chovesse — sem
-        erro visível, porque a saída continua plausível.
-
-        Nível é média da hora; chuva é soma, porque uma é estado e a outra é
-        acumulação.
-        """
         fim = pd.Timestamp(ate).tz_convert(FUSO) if ate is not None else _agora()
         ini = fim - timedelta(hours=horas)
         df = pd.read_sql_query(
@@ -211,25 +252,14 @@ class Banco:
             "nivel_cm": g["nivel_cm"].mean(),
             "chuva_mm": g["chuva_mm"].sum(min_count=1),
         })
-        # grade contínua (buracos no nível ficam NaN; o construtor sabe lidar)
         grade = pd.date_range(serie.index.min(), serie.index.max(),
                               freq="1h", tz=FUSO)
         out = serie.reindex(grade)
-        # hora sem registro de chuva é hora sem chuva medida, não hora com
-        # chuva desconhecida: o pluviômetro reporta zero quando não chove
         out["chuva_mm"] = out["chuva_mm"].fillna(0.0)
         out.index.name = "datahora"
         return out
 
     def chuva_recente(self, horas=6, fonte="ana"):
-        """
-        Chuva medida pelo pluviômetro da estação nas últimas horas.
-
-        É medição de instrumento, diferente da previsão meteorológica: capta o
-        evento convectivo que um modelo em grade de quilômetros costuma
-        perder. Devolve dict com o acumulado, a intensidade da última hora
-        cheia e o instante da última medição, ou None se não houver dado.
-        """
         ult = self.con.execute(
             "SELECT MAX(ts) FROM leituras WHERE chuva_mm IS NOT NULL"
         ).fetchone()[0]
@@ -265,9 +295,6 @@ class Banco:
         return {"ts": pd.Timestamp(row[0]).tz_convert(FUSO),
                 "nivel_cm": row[1], "metodo": row[2], "confianca": row[3]}
 
-    # ------------------------------------------------------------------
-    # alertas
-    # ------------------------------------------------------------------
     def gravar_alerta(self, tipo, estado, nivel_cm, origem, mensagem="", ts=None):
         ts = ts if ts is not None else _agora()
         self.con.execute(
@@ -277,28 +304,58 @@ class Banco:
         self.con.commit()
 
     def gravar_previsao(self, prev_sem, prev_com=None, clima=None,
-                        risco=None, ts=None):
-        """Registra um ciclo de previsão, para o dashboard montar o histórico."""
-        if not prev_sem:
-            return
-        ts = ts if ts is not None else _agora()
+                        risco=None, ts=None, ana_ultima_leitura=None,
+                        ana_horas_novas=None, ana_fora_do_ar=None,
+                        cidade=None, estacao=None, motivos=None):
+        ts_hora = pd.Timestamp(ts if ts is not None else _agora()).floor("h")
+        ps = prev_sem or {}
+        pc = prev_com or {}
         c = clima or {}
+        cid = cidade or {}
+        est = estacao or {}
         self.con.execute(
             "INSERT INTO previsoes (ts, nivel_atual, prev_6h, prev_12h, prev_24h,"
             " prev_6h_chuva, prev_12h_chuva, prev_24h_chuva, chuva_total_mm,"
-            " chuva_media_mmh, chuva_pico_mmh, chuva_prob_max, risco)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (pd.Timestamp(ts).isoformat(),
-             prev_sem.get("nivel_atual"),
-             prev_sem.get("6h"), prev_sem.get("12h"), prev_sem.get("24h"),
-             (prev_com or {}).get("6h"), (prev_com or {}).get("12h"),
-             (prev_com or {}).get("24h"),
+            " chuva_media_mmh, chuva_pico_mmh, chuva_prob_max, risco,"
+            " ana_ultima_leitura, ana_horas_novas, ana_fora_do_ar,"
+            " bacia_horas_previstas, bacia_horas_chuva,"
+            " cidade_mmh, cidade_acum6h, estacao_mmh, estacao_acum6h, risco_motivos)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+            " ON CONFLICT(ts) DO UPDATE SET"
+            " nivel_atual=excluded.nivel_atual, prev_6h=excluded.prev_6h,"
+            " prev_12h=excluded.prev_12h, prev_24h=excluded.prev_24h,"
+            " prev_6h_chuva=excluded.prev_6h_chuva,"
+            " prev_12h_chuva=excluded.prev_12h_chuva,"
+            " prev_24h_chuva=excluded.prev_24h_chuva,"
+            " chuva_total_mm=excluded.chuva_total_mm,"
+            " chuva_media_mmh=excluded.chuva_media_mmh,"
+            " chuva_pico_mmh=excluded.chuva_pico_mmh,"
+            " chuva_prob_max=excluded.chuva_prob_max, risco=excluded.risco,"
+            " ana_ultima_leitura=excluded.ana_ultima_leitura,"
+            " ana_horas_novas=excluded.ana_horas_novas,"
+            " ana_fora_do_ar=excluded.ana_fora_do_ar,"
+            " bacia_horas_previstas=excluded.bacia_horas_previstas,"
+            " bacia_horas_chuva=excluded.bacia_horas_chuva,"
+            " cidade_mmh=excluded.cidade_mmh, cidade_acum6h=excluded.cidade_acum6h,"
+            " estacao_mmh=excluded.estacao_mmh, estacao_acum6h=excluded.estacao_acum6h,"
+            " risco_motivos=excluded.risco_motivos",
+            (ts_hora.isoformat(),
+             ps.get("nivel_atual"),
+             ps.get("6h"), ps.get("12h"), ps.get("24h"),
+             pc.get("6h"), pc.get("12h"), pc.get("24h"),
              c.get("total_mm"), c.get("media_mmh"), c.get("pico_mmh"),
-             c.get("prob_max"), risco))
+             c.get("prob_max"), risco,
+             (pd.Timestamp(ana_ultima_leitura).isoformat()
+              if ana_ultima_leitura is not None else None),
+             ana_horas_novas,
+             (None if ana_fora_do_ar is None else int(bool(ana_fora_do_ar))),
+             c.get("horas_previstas"), c.get("horas_chuva"),
+             cid.get("mmh"), cid.get("acum_mm"),
+             est.get("mmh"), est.get("acum_mm"),
+             ("; ".join(motivos) if motivos else None)))
         self.con.commit()
 
     def previsoes_recentes(self, horas=72):
-        """Histórico de previsões, para o gráfico do dashboard."""
         ult = self.con.execute("SELECT MAX(ts) FROM previsoes").fetchone()[0]
         if ult is None:
             return pd.DataFrame()
@@ -327,22 +384,12 @@ class Banco:
             df["ts"] = pd.to_datetime(df["ts"], utc=True).dt.tz_convert(FUSO)
         return df
 
-    # ------------------------------------------------------------------
-    # importação do histórico da ANA (fonte única de verdade)
-    # ------------------------------------------------------------------
     def importar_csv_ana(self, caminho_csv, fonte="ana"):
-        """
-        Importa o dados_treino.csv (ou ana_horario.csv) para a tabela de
-        leituras, uma linha por hora. Idempotente: apaga a fonte antes.
-        """
         df = pd.read_csv(caminho_csv, parse_dates=["datahora"])
         df["datahora"] = pd.to_datetime(df["datahora"], utc=True).dt.tz_convert(FUSO)
         df = df.dropna(subset=["nivel_cm"])
-        # o CSV pode trazer a mesma hora repetida; mantém a última ocorrência
         df = df.drop_duplicates(subset=["datahora"], keep="last")
 
-        # o dataset de treino traz a chuva; sem ela, o histórico importado
-        # entraria no modelo como período seco
         col_chuva = next((c for c in ("chuva_mm", "chuva", "precipitacao")
                           if c in df.columns), None)
         chuvas = (df[col_chuva].tolist() if col_chuva

@@ -1,28 +1,8 @@
-# -*- coding: utf-8 -*-
-"""
-monitor.py — HidroVision AI
-
-Laço de monitoramento contínuo. A cada intervalo (padrão: 1 hora):
-
-  1. consulta o nível ATUAL do rio na estação da ANA (61305000);
-  2. consulta a PREVISÃO de chuva para a bacia (Open-Meteo);
-  3. grava no banco;
-  4. roda os modelos XGBoost em dois cenários:
-       - sem chuva adicional  -> o que acontece se não chover mais;
-       - com a chuva prevista -> o que acontece se a previsão se confirmar;
-  5. combina o resultado com o estado da régua urbana e classifica o risco.
-
-As duas camadas se confirmam:
-
-  RIO (modelo)  — antecipa: "o rio vai subir 80 cm nas próximas 6 h"
-  RÉGUA (câmera)— confirma: a água chegou à régua e continua subindo
-
-Rio subindo + água subindo na régua = alta probabilidade de inundação urbana.
-"""
 import argparse
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import pandas as pd
 
@@ -36,17 +16,29 @@ import alertas as A
 ESTACAO_ANA = "61305000"
 ANA_BASE = "https://www.ana.gov.br/hidrowebservice"
 
+PASTA = Path(__file__).resolve().parent
+DB_PADRAO = PASTA / "hidrovision.db"
+MODELOS_PADRAO = PASTA.parent / "preditivo" / "modelos"
+ENV_PADRAO = PASTA / ".env"
+MINUTO_RODADA = 5
+
+
+def carregar_env(caminho):
+    if not caminho.exists():
+        return
+    for linha in caminho.read_text(encoding="utf-8").splitlines():
+        linha = linha.strip()
+        if not linha or linha.startswith("#") or "=" not in linha:
+            continue
+        chave, valor = linha.split("=", 1)
+        os.environ.setdefault(chave.strip(), valor.strip().strip('"').strip("'"))
+
 
 class AnaForaDoAr(Exception):
-    """O serviço da ANA não respondeu. Não é falha do sistema local."""
+    pass
 
 
-# ----------------------------------------------------------------------
-# consulta do nível atual na ANA
-# ----------------------------------------------------------------------
 class AnaAtual:
-    """Cliente mínimo para o nível corrente da estação (token de 60 min)."""
-
     def __init__(self, identificador, senha):
         self.id, self.senha = identificador, senha
         self.token, self.token_ts = None, 0.0
@@ -68,16 +60,6 @@ class AnaAtual:
         return {"Authorization": f"Bearer {self.token}"}
 
     def leituras_do_dia(self, dia=None, tentativas=3):
-        """
-        Registros de 15 min do dia (padrão: hoje) -> DataFrame.
-
-        O servidor da ANA devolve 502/503/504 com alguma frequência. Como uma
-        falha pode cair justamente no ciclo do evento crítico, a consulta é
-        repetida com espera crescente antes de desistir. As tentativas são
-        silenciosas: se todas falharem, o ciclo emite um único aviso de que o
-        serviço está fora do ar — repetir a mesma informação três vezes só
-        polui o log de operação.
-        """
         import requests
         dia = dia or pd.Timestamp.now(tz=B.FUSO).date()
         params = {"Código da Estação": ESTACAO_ANA,
@@ -91,7 +73,7 @@ class AnaAtual:
             try:
                 r = requests.get(url, params=params, headers=self._headers(),
                                  timeout=60)
-                if r.status_code == 401:          # token expirou no meio
+                if r.status_code == 401:
                     self.token = None
                     continue
                 if r.status_code >= 500:
@@ -120,12 +102,9 @@ class AnaAtual:
         return df.dropna(subset=["datahora"])
 
 
-# ----------------------------------------------------------------------
-# classificação de risco combinando rio e régua
-# ----------------------------------------------------------------------
 @dataclass
 class Risco:
-    nivel: str            # normal | atencao | alerta | emergencia
+    nivel: str
     titulo: str
     motivos: list
     rio: dict | None = None
@@ -142,15 +121,8 @@ class Risco:
 def avaliar_risco(prev_sem_chuva, prev_com_chuva, resumo_clima,
                   nivel_regua=None, projecao_regua=None, nivel_rio_atual=None,
                   chuva_local=None):
-    """
-    Combina a previsão do rio (bacia) com o estado da régua urbana.
-
-    prev_*  : dicts do preditor {'nivel_atual':.., '6h':.., '12h':.., '24h':..}
-    nivel_regua / projecao_regua : estado da régua (None se ainda sem água)
-    """
     motivos, escalas = [], []
 
-    # ---------- camada 1: o rio ----------
     rio = None
     if prev_sem_chuva:
         atual = prev_sem_chuva["nivel_atual"]
@@ -175,7 +147,6 @@ def avaliar_risco(prev_sem_chuva, prev_com_chuva, resumo_clima,
         else:
             motivos.append("rio estável na previsão de 6 h")
 
-        # a chuva prevista muda o quadro?
         if prev_com_chuva and (d24_com - d24_sem) >= 15:
             motivos.append(f"a chuva prevista agrava em {d24_com - d24_sem:+.0f} "
                            f"cm o cenário de 24 h")
@@ -185,7 +156,6 @@ def avaliar_risco(prev_sem_chuva, prev_com_chuva, resumo_clima,
         motivos.append(f"previsão de {resumo_clima['total_mm']:.0f} mm "
                        f"em {resumo_clima['horas_previstas']} h")
 
-    # ---------- camada 2: a régua urbana ----------
     regua = None
     if nivel_regua is not None:
         folga = 100 - nivel_regua
@@ -212,7 +182,6 @@ def avaliar_risco(prev_sem_chuva, prev_com_chuva, resumo_clima,
                     escalas.append("alerta")
                 elif h <= 6:
                     escalas.append("atencao")
-            # confirmação cruzada: rio subindo E régua subindo
             if rio and rio["delta6_com"] >= 15:
                 escalas.append("alerta")
                 motivos.append("CONFIRMAÇÃO: modelo prevê rio em elevação e a "
@@ -220,10 +189,6 @@ def avaliar_risco(prev_sem_chuva, prev_com_chuva, resumo_clima,
         elif projecao_regua is not None and projecao_regua.estado == "descendo":
             motivos.append("água recuando na régua")
 
-    # ---------- camada 3: a chuva na própria cidade ----------
-    # Independente do rio: a água que cai aqui vai para a drenagem urbana e
-    # alaga rua antes de qualquer cheia chegar. Por isso não passa pelos
-    # modelos, que foram treinados com a chuva da bacia alta.
     local = None
     if chuva_local:
         grau_local, motivo_local = C.avaliar_local(chuva_local)
@@ -246,47 +211,30 @@ def avaliar_risco(prev_sem_chuva, prev_com_chuva, resumo_clima,
     return Risco(nivel, titulos[nivel], motivos, rio, regua, local)
 
 
-# ----------------------------------------------------------------------
-# ciclo de monitoramento
-# ----------------------------------------------------------------------
 class Monitor:
-    def __init__(self, db="hidrovision.db", pasta_modelos=".",
+    def __init__(self, db=DB_PADRAO, pasta_modelos=MODELOS_PADRAO,
                  ana_id=None, ana_senha=None, horas_previsao=24,
                  lat=C.LAT_BACIA, lon=C.LON_BACIA, notificar=True,
-                 lembrete_horas=6, dias_historico=3):
-        self.banco = B.Banco(db)
-        # canais de notificação: console, arquivo e Telegram (se configurado)
+                 lembrete_horas=6, dias_historico=3, minuto_rodada=MINUTO_RODADA):
+        self.banco = B.Banco(str(db))
         self.canais = A.canais_padrao() if notificar else []
         self._ultimo_risco = None
-        # de quantas em quantas horas repetir um alerta que persiste.
-        # 0 desativa o lembrete.
         self.lembrete_horas = lembrete_horas
         self._ultima_notificacao = None
         self._inicio_risco = None
-        self.preditor = P.Preditor(pasta_modelos)
+        self.preditor = P.Preditor(str(pasta_modelos))
         self.clima = C.Clima(lat, lon)
-        # segunda leitura, na cidade: chuva observada agora, para o alerta
-        # local de alagamento urbano
         self.clima_local = C.Clima(C.LAT_CIDADE, C.LON_CIDADE)
         self.horas_previsao = horas_previsao
         self.ana = (AnaAtual(ana_id, ana_senha)
                     if (ana_id and ana_senha) else None)
-        # quantos dias de leitura buscar na ANA a cada ciclo
         self.dias_historico = dias_historico
-        # evita repetir o aviso de indisponibilidade a cada ciclo
         self._ana_fora = False
+        self.minuto_rodada = minuto_rodada
+        self._ultima_hora_ana = None
+        self._ultima_leitura_ana = None
 
-    # ------------------------------------------------------------------
     def atualizar_rio(self, dias=None):
-        """
-        Busca o nível dos últimos dias na ANA e grava as leituras novas.
-
-        Buscar só o dia corrente deixaria a série curta demais de manhã: às
-        08h existiriam oito leituras horárias, e a tendência precisa de mais
-        que isso. Varrendo alguns dias para trás, o primeiro ciclo já entrega
-        série suficiente para tendência e para as defasagens do preditor.
-        Reescrever a mesma hora é inofensivo: o banco grava por timestamp.
-        """
         if self.ana is None:
             return 0
         dias = dias or self.dias_historico
@@ -296,8 +244,6 @@ class Monitor:
             try:
                 df = self.ana.leituras_do_dia(hoje - pd.Timedelta(days=d))
             except AnaForaDoAr:
-                # se um dia falhar, segue com os que vieram; só propaga o
-                # erro quando nenhum dia foi obtido
                 if d == 0 and not partes:
                     raise
                 continue
@@ -306,12 +252,14 @@ class Monitor:
         if not partes:
             return 0
         df = pd.concat(partes).sort_values("datahora")
-        # agrega para hora (o preditor espera base horária)
+        validas = df.dropna(subset=["nivel_cm"])
+        if not validas.empty:
+            self._ultima_leitura_ana = validas["datahora"].max()
         horario = (df.set_index("datahora")
                      .resample("1h")
                      .agg({"nivel_cm": "mean", "chuva_mm": "sum"})
                      .dropna(subset=["nivel_cm"]))
-        n = 0
+        novas = 0
         for ts, row in horario.iterrows():
             chuva = row.get("chuva_mm")
             if chuva is not None and pd.isna(chuva):
@@ -320,12 +268,17 @@ class Monitor:
                                       ts=ts, fonte="ana", janela_mediana=1,
                                       chuva_mm=(None if chuva is None
                                                 else float(chuva)))
-            n += 1
-        return n
+            if self._ultima_hora_ana is None or ts > self._ultima_hora_ana:
+                novas += 1
+        if not horario.empty:
+            ultima = horario.index.max()
+            if self._ultima_hora_ana is None or ultima > self._ultima_hora_ana:
+                self._ultima_hora_ana = ultima
+        return novas
 
     def ciclo(self, nivel_regua=None, projecao_regua=None, verboso=True):
-        """Um ciclo completo. Devolve (risco, previsoes, resumo_clima)."""
         agora = pd.Timestamp.now(tz=B.FUSO)
+        ana_tinha_baseline = self._ultima_hora_ana is not None
 
         n_novas = 0
         ana_ok = True
@@ -351,24 +304,10 @@ class Monitor:
             if verboso:
                 print("  [CLIMA] previsão do tempo indisponível neste ciclo")
 
-        # ---------- chuva local (não entra nos modelos do rio) ----------
-        # Duas fontes, e nenhuma delas basta sozinha:
-        #
-        #   Open-Meteo em Santa Rita  aponta para a área urbana, que é onde a
-        #       chuva alaga rua. Mas é modelo numérico em grade de
-        #       quilômetros, e suaviza a pancada convectiva pontual.
-        #   Pluviômetro da estação    é medição de instrumento, mas fica no
-        #       rio, não na cidade. Chuva convectiva pode cair no bairro e não
-        #       tocar a estação.
-        #
-        # Em testes as duas se contradisseram nos dois sentidos: num dia a
-        # estação mediu 0,2 mm com o modelo em zero; no outro o modelo deu
-        # 1,1 mm/h com a estação zerada. Por isso o sistema usa a da cidade
-        # para decidir e guarda as duas para exibição: esconder a divergência
-        # seria fingir uma certeza que não existe.
         local = self.clima_local.agora()
         if local:
             local["origem"] = "Open-Meteo, área urbana"
+        cidade_dados = local
 
         medida = self.banco.chuva_recente(horas=6)
         if medida:
@@ -381,7 +320,7 @@ class Monitor:
                 "horario": f"{medida['ts']:%d/%m %H:%M}",
             }
             if local is None:
-                local = estacao          # sem a previsão, vale a medição
+                local = estacao
             else:
                 local["estacao"] = estacao
 
@@ -397,15 +336,32 @@ class Monitor:
                               nivel_regua, projecao_regua,
                               chuva_local=local)
 
-        # registra o ciclo para o dashboard montar o histórico
-        self.banco.gravar_previsao(prev_sem, prev_com, resumo,
-                                   risco.nivel, ts=agora)
+        ana_horas_novas = (None if self.ana is None or not ana_tinha_baseline
+                           else n_novas)
+        ana_fora_do_ar = None if self.ana is None else (not ana_ok)
+        try:
+            self.banco.gravar_previsao(
+                prev_sem, prev_com, resumo, risco.nivel, ts=agora,
+                ana_ultima_leitura=self._ultima_leitura_ana,
+                ana_horas_novas=ana_horas_novas,
+                ana_fora_do_ar=ana_fora_do_ar,
+                cidade=cidade_dados, estacao=medida,
+                motivos=risco.motivos)
+        except Exception as e:
+            print(f"  [BANCO] falha ao gravar o ciclo: {e}")
 
         self._notificar(risco, prev_sem, prev_com, resumo, agora)
 
         if verboso:
-            print(f"\n{'='*70}\n{agora:%d/%m/%Y %H:%M}"
-                  f"{f'  ({n_novas} leituras novas da ANA)' if n_novas else ''}")
+            if self.ana is None:
+                cabecalho_ana = ""
+            elif n_novas:
+                cabecalho_ana = f"  ({n_novas} h nova(s) da ANA)"
+            elif ana_ok:
+                cabecalho_ana = "  (nenhuma hora nova da ANA)"
+            else:
+                cabecalho_ana = ""
+            print(f"\n{'='*70}\n{agora:%d/%m/%Y %H:%M}{cabecalho_ana}")
             print(f"  bacia alta (Maria da Fé): {C.descrever(resumo)}")
             origem = (local or {}).get("origem", "sem fonte")
             print(f"  chuva na cidade ({origem}): {C.descrever_local(local)}")
@@ -415,12 +371,9 @@ class Monitor:
                 print(f"  chuva na estação (pluviômetro): "
                       f"{C.descrever_local(est)}")
             if prev_sem:
-                # A previsão exibida já considera a chuva OBSERVADA: ela entra
-                # pela série do banco, nos acumulados de 3 a 72 h. O cenário
-                # com a chuva ainda prevista continua sendo calculado e
-                # gravado, e aparece no painel de simulação; aqui fica de fora
-                # para não confundir o observado com a hipótese.
-                print(f"  rio agora: {prev_sem['nivel_atual']:.0f} cm")
+                leitura = (f" (leitura ANA de {self._ultima_leitura_ana:%d/%m %H:%M})"
+                           if self._ultima_leitura_ana is not None else "")
+                print(f"  rio agora: {prev_sem['nivel_atual']:.0f} cm{leitura}")
                 for h in ("6h", "12h", "24h"):
                     if h in prev_sem:
                         print(f"    {h:>4}: {prev_sem[h]:6.0f} cm")
@@ -436,15 +389,6 @@ class Monitor:
         return risco, (prev_com or prev_sem), resumo
 
     def _notificar(self, risco, prev_sem, prev_com, resumo, agora=None):
-        """
-        Notifica em duas situações:
-
-        1. MUDANÇA de patamar de risco. Um ciclo por hora repetindo "situação
-           normal" seria ruído; o que interessa é a transição.
-        2. LEMBRETE periódico enquanto um alerta persiste. Um alerta que dura
-           doze horas sem nenhuma repetição corre o risco de ser esquecido, e
-           a Defesa Civil precisa saber que a condição continua ativa.
-        """
         if not self.canais:
             return
         agora = agora or pd.Timestamp.now(tz=B.FUSO)
@@ -461,7 +405,7 @@ class Monitor:
             return
         self._ultimo_risco = risco.nivel
         if mudou and anterior is None and risco.nivel == "normal":
-            return                      # primeiro ciclo em situação normal
+            return
         self._ultima_notificacao = agora
 
         titulo = {"normal": "Situação normalizada",
@@ -491,8 +435,14 @@ class Monitor:
             except Exception as e:
                 print(f"[aviso] canal {type(canal).__name__} falhou: {e}")
 
-    def rodar(self, intervalo_min=60, ciclos=None):
-        """Laço contínuo. ciclos=None roda indefinidamente."""
+    def _proxima_rodada(self):
+        agora = pd.Timestamp.now(tz=B.FUSO)
+        alvo = agora.replace(minute=self.minuto_rodada, second=0, microsecond=0)
+        if alvo <= agora:
+            alvo += pd.Timedelta(hours=1)
+        return alvo
+
+    def rodar(self, ciclos=None):
         n = 0
         while ciclos is None or n < ciclos:
             try:
@@ -500,18 +450,27 @@ class Monitor:
             except Exception as e:
                 print(f"[erro no ciclo] {e}")
             n += 1
-            if ciclos is None or n < ciclos:
-                time.sleep(intervalo_min * 60)
+            if ciclos is not None and n >= ciclos:
+                break
+            alvo = self._proxima_rodada()
+            print(f"\n  próxima rodada às {alvo:%H:%M}")
+            while True:
+                restante = (alvo - pd.Timestamp.now(tz=B.FUSO)).total_seconds()
+                if restante <= 0:
+                    break
+                time.sleep(min(restante, 60))
 
 
 if __name__ == "__main__":
+    carregar_env(ENV_PADRAO)
+
     ap = argparse.ArgumentParser(
         description="Monitoramento contínuo: nível da ANA + previsão de chuva.")
-    ap.add_argument("--db", default="hidrovision.db")
-    ap.add_argument("--modelos", default=".")
-    ap.add_argument("--intervalo", type=int, default=60,
-                    help="minutos entre ciclos (padrão 60)")
-    ap.add_argument("--ciclos", type=int, default=1,
+    ap.add_argument("--db", default=str(DB_PADRAO))
+    ap.add_argument("--modelos", default=str(MODELOS_PADRAO))
+    ap.add_argument("--minuto", type=int, default=MINUTO_RODADA,
+                    help="minuto de cada hora em que a rodada acontece")
+    ap.add_argument("--ciclos", type=int, default=0,
                     help="quantos ciclos rodar (0 = contínuo)")
     ap.add_argument("--horas-previsao", type=int, default=24)
     ap.add_argument("--lembrete", type=int, default=6,
@@ -524,11 +483,15 @@ if __name__ == "__main__":
                     help="popula o banco com o histórico antes de começar")
     args = ap.parse_args()
 
+    if not (args.ana_id and args.ana_senha):
+        print(f"[aviso] credenciais da ANA não encontradas em {ENV_PADRAO} — "
+              f"rodando sem nível do rio")
+
     m = Monitor(args.db, args.modelos, args.ana_id, args.ana_senha,
                 args.horas_previsao, lembrete_horas=args.lembrete,
-                dias_historico=args.dias)
+                dias_historico=args.dias, minuto_rodada=args.minuto)
     if args.importar:
         n = m.banco.importar_csv_ana(args.importar)
         print(f"{n} horas históricas importadas de {args.importar}")
 
-    m.rodar(args.intervalo, None if args.ciclos == 0 else args.ciclos)
+    m.rodar(None if args.ciclos == 0 else args.ciclos)
