@@ -1,22 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-leitura_nivel.py — HidroVision AI
-Lê o nível da água na régua linimétrica a partir do modelo YOLO26 (V05).
+mdYOLO.py — HidroVision AI
+Lê o nível da água na régua linimétrica a partir do modelo YOLO26.
 
 Método (na ordem em que é tentado):
   1) INTERPOLAÇÃO — com dois ou mais números detectados obtém-se a escala
      px/cm; a borda inferior do menor número visível marca a linha d'água.
      Resolução esperada: ~2-3 cm.
   2) SURFACE — se a classe `surface` for detectada com confiança alta, usa a
-     posição dela para refinar. (No V05 a surface tem recall 0,39, por isso
-     é auxiliar e não principal.)
+     posição dela para refinar. (A surface tem recall baixo, por isso é
+     auxiliar e não principal.)
   3) MENOR NÚMERO — fallback: o menor número visível define a faixa.
      Resolução ~10 cm.
 
 Uso:
-    python leitura_nivel.py --modelo hidrovision_v05.pt --imagem foto.jpg
-    python leitura_nivel.py --modelo hidrovision_v05.pt --pasta ./fotos --csv saida.csv
-    python leitura_nivel.py --modelo hidrovision_v05.pt --webcam 0
+    python mdYOLO.py --modelo hidrovision_v06_regua.pt --imagem foto.jpg
+    python mdYOLO.py --modelo hidrovision_v06_regua.pt --pasta ./fotos --csv saida.csv
+    python mdYOLO.py --modelo hidrovision_v06_regua.pt --webcam 0
 """
 import argparse
 import csv
@@ -28,6 +28,7 @@ from datetime import datetime
 import cv2
 import numpy as np
 from ultralytics import YOLO
+from ultralytics.utils.plotting import colors as PALETA
 
 try:
     import geometria as G
@@ -179,7 +180,6 @@ class FiltroMediana:
 
     def __init__(self, n=JANELA_MEDIANA):
         self.n = n
-        self.buf: list[float] = field(default_factory=list)
         self.buf = []
 
     def add(self, valor):
@@ -204,7 +204,49 @@ def faixa_do_nivel(leitura, numeros=None):
     return base, min(base + 10, 100)
 
 
-def anotar(frame, resultado, leitura, numeros=None):
+def corrigir_deteccoes(numeros):
+    """Aplica a correção geométrica antes da leitura, para que o desenho e o
+    texto mostrem os rótulos já corrigidos pela posição na régua."""
+    if not GEOMETRIA or len(numeros) < 2:
+        return numeros
+    corrigidas, _, _ = G.corrigir(numeros)
+    return corrigidas
+
+
+CORES = {}
+
+
+def montar_paleta(nomes):
+    """Reproduz a paleta do Ultralytics, para que as caixas fiquem com as mesmas
+    cores por classe do plot original."""
+    CORES.clear()
+    for i, nome in nomes.items():
+        CORES[nome] = tuple(int(v) for v in PALETA(int(i), True))
+
+
+def desenhar(frame, numeros, gauges, surfaces):
+    """Desenha as caixas com os rótulos já corrigidos, em vez do plot cru do
+    Ultralytics, que mostra sempre a classe original do detector."""
+    img = frame.copy()
+    espessura = max(2, round(0.002 * (img.shape[0] + img.shape[1]) / 2))
+    fonte = max(0.5, espessura / 3)
+    for d in list(gauges) + list(surfaces) + list(numeros):
+        cor = CORES.get(d.classe, (60, 200, 90))
+        x1, y1, x2, y2 = int(d.x1), int(d.y1), int(d.x2), int(d.y2)
+        cv2.rectangle(img, (x1, y1), (x2, y2), cor, espessura, cv2.LINE_AA)
+        texto = f"{d.classe} {d.conf:.2f}"
+        (tw, th), _ = cv2.getTextSize(texto, cv2.FONT_HERSHEY_SIMPLEX, fonte, 1)
+        fora = y1 - th >= 3
+        cv2.rectangle(img, (x1, y1 - th - 4 if fora else y1),
+                      (x1 + tw + 2, y1 if fora else y1 + th + 4), cor, -1, cv2.LINE_AA)
+        claro = (cor[0] * 0.114 + cor[1] * 0.587 + cor[2] * 0.299) > 140
+        cv2.putText(img, texto, (x1 + 1, y1 - 3 if fora else y1 + th + 1),
+                    cv2.FONT_HERSHEY_SIMPLEX, fonte,
+                    (0, 0, 0) if claro else (255, 255, 255), 1, cv2.LINE_AA)
+    return img
+
+
+def anotar(frame, resultado, leitura, numeros=None, gauges=None, surfaces=None):
     """
     Desenha as detecções do YOLO e uma faixa inferior enxuta com:
       - os números efetivamente reconhecidos (após a correção geométrica);
@@ -212,7 +254,8 @@ def anotar(frame, resultado, leitura, numeros=None):
 
     Sem barra lateral e sem texto sobreposto: a imagem fica livre para as caixas.
     """
-    img = resultado.plot()
+    base = frame if frame is not None else resultado.orig_img
+    img = desenhar(base, numeros or [], gauges or [], surfaces or [])
     h, w = img.shape[:2]
 
     VERDE = (60, 200, 90)
@@ -262,15 +305,16 @@ def anotar(frame, resultado, leitura, numeros=None):
 def processar_imagem(modelo, caminho, imgsz, salvar_em=None):
     res = modelo.predict(caminho, imgsz=imgsz, verbose=False)[0]
     numeros, gauges, surfaces = extrair(res, modelo.names)
+    numeros = corrigir_deteccoes(numeros)
     leitura = ler_nivel(numeros, gauges, surfaces)
     if salvar_em:
-        cv2.imwrite(salvar_em, anotar(None, res, leitura, numeros))
+        cv2.imwrite(salvar_em, anotar(None, res, leitura, numeros, gauges, surfaces))
     return leitura
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--modelo", default="hidrovision_v05.pt")
+    ap.add_argument("--modelo", default="hidrovision_v06_regua.pt")
     ap.add_argument("--imagem")
     ap.add_argument("--pasta")
     ap.add_argument("--webcam", type=int)
@@ -280,6 +324,7 @@ def main():
     args = ap.parse_args()
 
     modelo = YOLO(args.modelo)
+    montar_paleta(modelo.names)
     print(f"modelo: {args.modelo} | classes: {len(modelo.names)}")
 
     # ---------- imagem única ----------
@@ -359,9 +404,10 @@ def main():
                 break
             res = modelo.predict(frame, imgsz=args.imgsz, verbose=False)[0]
             numeros, gauges, surfaces = extrair(res, modelo.names)
+            numeros = corrigir_deteccoes(numeros)
             leitura = ler_nivel(numeros, gauges, surfaces)
             suave = filtro.add(leitura.nivel_cm)
-            img = anotar(frame, res, leitura, numeros)
+            img = anotar(frame, res, leitura, numeros, gauges, surfaces)
             cv2.imshow("HidroVision", img)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break

@@ -11,4 +11,4 @@ $arquivo = Join-Path $logs "monitor_$data.log"
 Write-Host "monitor iniciado - log em $arquivo"
 Write-Host "para acompanhar: Get-Content `"$arquivo`" -Wait -Tail 20"
 
-python integracao/monitor.py --modelos preditivo/modelos --ciclos 0 --intervalo 60 *> $arquivo
+& "C:\Users\yande\AppData\Local\Python\pythoncore-3.14-64\python.exe" -u integracao/monitor.py --ciclos 0 *> $arquivo

@@ -371,7 +371,7 @@ with aba_mon:
             patamar = t
     cor = CORES_RISCO[patamar]
 
-    c1, c2, c3, c4 = st.columns(4, gap="medium")
+    c1, c2, c3 = st.columns(3, gap="medium")
     c1.markdown(card(
         "Nível atual", f"{nivel:.0f} cm", cor_num=TEAL,
         nota=f"leitura de {pd.to_datetime(ult['ts']):%d/%m às %H:%M}"),
@@ -390,21 +390,17 @@ with aba_mon:
                          nota=getattr(tend, "detalhe", "sem dados suficientes")
                               if tend else "sem dados"), unsafe_allow_html=True)
 
-    c3.markdown(card(f"Folga até {critico:.0f} cm", f"{critico - nivel:.0f} cm",
-                     nota="distância até o ponto em que a água atinge a "
-                          "área urbana"), unsafe_allow_html=True)
-
     if proj is not None and proj.estado == "subindo":
-        c4.markdown(card("Atinge o crítico em", proj.tempo_formatado,
+        c3.markdown(card("Atinge o crítico em", proj.tempo_formatado,
                          pill="↑ subindo", pill_cor=AMBER,
                          nota="extrapolação da velocidade atual"),
                     unsafe_allow_html=True)
     elif proj is not None and proj.estado == "descendo":
-        c4.markdown(card("Trajetória", "recuando", pill_cor=TEAL,
+        c3.markdown(card("Trajetória", "recuando", pill_cor=TEAL,
                          nota="a projeção não se aplica na descida"),
                     unsafe_allow_html=True)
     else:
-        c4.markdown(card("Trajetória", "estável",
+        c3.markdown(card("Trajetória", "estável",
                          nota="sem subida sustentada, a projeção não se aplica"),
                     unsafe_allow_html=True)
 
@@ -421,7 +417,7 @@ with aba_mon:
         f'</div>', unsafe_allow_html=True)
 
     # ------------------------------------------------------------------
-    # previsão em tabela: o número que interessa, sem depender do gráfico
+    # previsão: só o número que interessa — atual, 6 h e 12 h
     # ------------------------------------------------------------------
     st.markdown("<hr>", unsafe_allow_html=True)
     st.markdown("## Previsão do nível")
@@ -432,40 +428,31 @@ with aba_mon:
                    "monitoramento para calcular.")
     else:
         base_n = float(ultima_prev["nivel_atual"])
-        linhas = []
-        for h in (6, 12, 24):
-            sem = ultima_prev.get(f"prev_{h}h")
-            com = ultima_prev.get(f"prev_{h}h_chuva")
-            if not isinstance(sem, (int, float)):
-                continue
-            linha = {
-                "horizonte": f"{h} horas",
-                "sem chuva nova": f"{sem:.0f} cm",
-                "variação": f"{sem - base_n:+.0f} cm",
-            }
-            if isinstance(com, (int, float)):
-                linha["com a chuva prevista"] = f"{com:.0f} cm"
-                linha["efeito da chuva"] = f"{com - sem:+.0f} cm"
-            else:
-                linha["com a chuva prevista"] = "—"
-                linha["efeito da chuva"] = "—"
-            linhas.append(linha)
+        quando = ultima_prev.get("ts")
 
-        if linhas:
-            st.dataframe(pd.DataFrame(linhas), use_container_width=True,
-                         hide_index=True)
-            quando = ultima_prev.get("ts")
-            nota = (f"Calculada às {quando:%d/%m %H:%M} a partir de "
-                    f"{base_n:.0f} cm." if quando is not None
-                    else f"A partir de {base_n:.0f} cm.")
-            st.markdown(
-                f'<div class="hv-legenda">{nota} A coluna sem chuva nova '
-                f'mostra o rio seguindo a própria recessão; a outra injeta a '
-                f'chuva prevista para a bacia. A diferença entre as duas é o '
-                f'impacto esperado da precipitação.</div>',
-                unsafe_allow_html=True)
-        else:
-            st.caption("A previsão registrada não trouxe os horizontes.")
+        pc, p6, p12 = st.columns(3, gap="medium")
+        pc.markdown(card(
+            "Situação atual", f"{base_n:.0f} cm", cor_num=TEAL,
+            nota=(f"leitura de {quando:%d/%m às %H:%M}" if quando is not None
+                  else "última leitura registrada")),
+            unsafe_allow_html=True)
+
+        for coluna, h in ((p6, 6), (p12, 12)):
+            valor = ultima_prev.get(f"prev_{h}h_chuva")
+            if not isinstance(valor, (int, float)):
+                valor = ultima_prev.get(f"prev_{h}h")
+            if isinstance(valor, (int, float)):
+                delta = valor - base_n
+                cor_p = AMBER if delta > 0.5 else TEAL if delta < -0.5 else MUT
+                coluna.markdown(card(
+                    f"Previsão em {h} horas", f"{valor:.0f} cm",
+                    pill=f"{delta:+.0f} cm", pill_cor=cor_p,
+                    nota="considera a chuva prevista para a bacia"),
+                    unsafe_allow_html=True)
+            else:
+                coluna.markdown(card(f"Previsão em {h} horas", "—",
+                                     nota="sem previsão para este horizonte"),
+                                unsafe_allow_html=True)
 
     # ------------------------------------------------------------------
     # chuva: bacia alta (alimenta os modelos) e cidade (alerta local)
@@ -532,55 +519,24 @@ with aba_mon:
         hist = (serie[["ts", "nivel_cm"]].rename(columns={"nivel_cm": "nivel"})
                 .assign(ts=lambda d: pd.to_datetime(d["ts"])))
 
-        prev = estado.get("previsoes")
-        futuro = pd.DataFrame()
-        if prev:
-            base_ts = hist["ts"].max()
-            pts = [{"ts": base_ts, "nivel": float(hist["nivel"].iloc[-1])}]
-            for h in (6, 12, 24):
-                v = prev.get(f"{h}h")
-                if isinstance(v, (int, float)):
-                    pts.append({"ts": base_ts + pd.Timedelta(hours=h),
-                                "nivel": float(v)})
-            if len(pts) > 1:
-                futuro = pd.DataFrame(pts)
+        amostra = (hist.set_index("ts")["nivel"]
+                   .resample("6h").last().dropna())
+        variacoes = amostra.diff()
 
-        todos = pd.concat([hist, futuro]) if not futuro.empty else hist
-        margem = max((todos["nivel"].max() - todos["nivel"].min()) * 0.35, 4)
-        y_min = todos["nivel"].min() - margem
-        y_max = todos["nivel"].max() + margem
-        ex, ey = eixos(y_min, y_max)
+        linhas = [{
+            "quando": f"{ts:%d/%m %H:%M}",
+            "nível": f"{amostra[ts]:.0f} cm",
+            "variação (6h)": ("—" if pd.isna(variacoes[ts])
+                              else f"{variacoes[ts]:+.0f} cm"),
+        } for ts in reversed(amostra.index)]
 
-        camadas = [
-            alt.Chart(hist).mark_line(color=TEAL, strokeWidth=2.4,
-                                      interpolate="monotone")
-            .encode(x=ex, y=ey,
-                    tooltip=[alt.Tooltip("ts:T", title="quando",
-                                         format="%d/%m %H:%M"),
-                             alt.Tooltip("nivel:Q", title="nível",
-                                         format=".1f")])
-        ]
-        if not futuro.empty:
-            camadas.append(
-                alt.Chart(futuro).mark_line(color=TEAL, strokeWidth=1.8,
-                                            strokeDash=[5, 4], opacity=0.65)
-                .encode(x=ex, y=ey))
-            camadas.append(
-                alt.Chart(futuro.iloc[1:]).mark_point(
-                    color=TEAL, size=42, filled=True, opacity=0.8)
-                .encode(x=ex, y=ey,
-                        tooltip=[alt.Tooltip("ts:T", title="horizonte",
-                                             format="%d/%m %H:%M"),
-                                 alt.Tooltip("nivel:Q", title="previsto",
-                                             format=".1f")]))
-        camadas += regras_limiar(limiares, y_min, y_max)
-
-        st.altair_chart(finalizar(camadas), use_container_width=True)
+        st.dataframe(pd.DataFrame(linhas), use_container_width=True,
+                     hide_index=True,
+                     height=min(400, 40 + 35 * len(linhas)))
         st.markdown(
-            '<div class="hv-legenda">Linha cheia: nível medido. '
-            + ("Tracejada: previsão para 6, 12 e 24 horas. "
-               if not futuro.empty else "")
-            + "Só os limiares dentro da escala são desenhados.</div>",
+            '<div class="hv-legenda">Uma leitura a cada 6 horas dentro da '
+            'janela selecionada, da mais recente para a mais antiga. '
+            'Variação em relação à leitura anterior da tabela.</div>',
             unsafe_allow_html=True)
 
     st.markdown("<hr>", unsafe_allow_html=True)

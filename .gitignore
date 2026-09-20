@@ -42,3 +42,8 @@ Desktop.ini
 
 # ---------- Claude Code ----------
 CLAUDE.md
+
+regua.dat
+__pycache__/
+*.db
+alertas_demo.log
