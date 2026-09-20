@@ -47,3 +47,9 @@ regua.dat
 __pycache__/
 *.db
 alertas_demo.log
+
+regua.dat
+__pycache__/
+*.db
+alertas_demo.log
+alertas.log
