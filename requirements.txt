@@ -14,3 +14,7 @@ requests>=2.32
 
 # --- gráficos ---
 matplotlib>=3.8
+
+# --- painel ---
+streamlit>=1.40
+altair>=5.0

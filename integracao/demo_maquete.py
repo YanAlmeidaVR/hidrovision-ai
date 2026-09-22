@@ -270,7 +270,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--modelo", default=os.path.join("..", "visao", "hidrovision_v06_regua.pt"))
     ap.add_argument("--modelos", default=os.path.join("..", "preditivo", "modelos"))
-    ap.add_argument("--webcam", type=int, default=0)
+    ap.add_argument("--webcam", type=int, default=2 if sys.platform.startswith("win") else 0)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--intervalo", type=float, default=3.0,
                     help="segundos entre gravações no banco")
@@ -307,10 +307,8 @@ def main():
     V.montar_paleta(modelo.names)
     print(f"modelo: {args.modelo} | classes: {len(modelo.names)}")
 
-    cap = cv2.VideoCapture(args.webcam, cv2.CAP_DSHOW)
-    if not cap.isOpened():
-        cap = cv2.VideoCapture(args.webcam, cv2.CAP_MSMF)
-    if not cap.isOpened():
+    cap = V.abrir_camera(args.webcam)
+    if cap is None:
         print("não foi possível abrir a câmera", args.webcam)
         return
 

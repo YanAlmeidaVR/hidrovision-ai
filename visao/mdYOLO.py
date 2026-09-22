@@ -22,6 +22,7 @@ import argparse
 import csv
 import glob
 import os
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -302,6 +303,21 @@ def anotar(frame, resultado, leitura, numeros=None, gauges=None, surfaces=None):
     return img
 
 
+def abrir_camera(indice):
+    """Abre a câmera com o backend certo para o sistema: DirectShow ou Media
+    Foundation no Windows, V4L2 no Linux da Raspberry."""
+    if sys.platform.startswith("win"):
+        backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF]
+    else:
+        backends = [cv2.CAP_V4L2, cv2.CAP_ANY]
+    for backend in backends:
+        cap = cv2.VideoCapture(indice, backend)
+        if cap.isOpened():
+            return cap
+        cap.release()
+    return None
+
+
 def processar_imagem(modelo, caminho, imgsz, salvar_em=None):
     res = modelo.predict(caminho, imgsz=imgsz, verbose=False)[0]
     numeros, gauges, surfaces = extrair(res, modelo.names)
@@ -390,10 +406,8 @@ def main():
 
     # ---------- webcam ----------
     if args.webcam is not None:
-        cap = cv2.VideoCapture(args.webcam, cv2.CAP_DSHOW)
-        if not cap.isOpened():
-            cap = cv2.VideoCapture(args.webcam, cv2.CAP_MSMF)
-        if not cap.isOpened():
+        cap = abrir_camera(args.webcam)
+        if cap is None:
             print("não foi possível abrir a câmera", args.webcam)
             return
         filtro = FiltroMediana()
