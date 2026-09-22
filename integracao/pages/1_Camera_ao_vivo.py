@@ -9,8 +9,10 @@ da régua para dizer se e quando a água transbordaria.
 
 O monitor do rio real continua na página principal do dashboard.
 """
+import json
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 import cv2
@@ -96,10 +98,18 @@ def modelo_padrao():
     return str(PT)
 
 
+REDE = "Raspberry pela rede"
+LOCAL = "Câmera deste computador"
+
 st.sidebar.subheader("Câmera")
-padrao = modelo_padrao()
-caminho_modelo = st.sidebar.text_input("Modelo da régua", padrao)
-indice = int(st.sidebar.number_input("Índice da câmera", 0, 9, 2 if WINDOWS else 0))
+fonte = st.sidebar.radio("Fonte", [REDE, LOCAL])
+if fonte == REDE:
+    endereco = st.sidebar.text_input("Endereço da Raspberry", "http://raspberrypi.local:8000").rstrip("/")
+    caminho_modelo, indice = None, None
+else:
+    endereco = None
+    caminho_modelo = st.sidebar.text_input("Modelo da régua", modelo_padrao())
+    indice = int(st.sidebar.number_input("Índice da câmera", 0, 9, 2 if WINDOWS else 0))
 ligada = st.sidebar.toggle("Câmera ligada", value=True)
 intervalo = st.sidebar.slider("Atualizar a cada (s)", 0.5, 3.0, 1.0, 0.5)
 telegram = st.sidebar.checkbox("Enviar alertas ao Telegram", value=False)
@@ -117,6 +127,69 @@ if botao(b1, "Previsão de chuva", type="primary"):
 if botao(b2, "Tempo firme"):
     ss.rio.trocar("firme")
     ss.alerta.ultimo = "_trocou"
+
+
+def mostrar_info(nivel, vals, detalhe):
+    if nivel is None:
+        st.markdown("### Procurando a régua")
+        st.caption(detalhe)
+        return
+
+    folga = D.NIVEL_CRITICO - nivel
+    m1, m2 = st.columns(2)
+    m1.metric("Nível na régua", f"{nivel:.0f} cm")
+    m2.metric("Folga até transbordar", f"{folga:.0f} cm")
+    if vals:
+        st.caption("números detectados: " + " ".join(map(str, vals)))
+
+    aval = D.avaliar_previsao_local(nivel, ss.rio.variacoes())
+    urgencia = aval["urgencia"] if aval else None
+    st.markdown(selo(urgencia), unsafe_allow_html=True)
+
+    st.markdown("#### Previsão do rio")
+    if ss.rio.chuva_prevista_mm:
+        st.caption(f"chuva na bacia: {ss.rio.chuva_prevista_mm} mm em 12 h "
+                   "(cenário simulado)")
+    else:
+        st.caption("tempo firme, sem chuva prevista (cenário simulado)")
+
+    if aval:
+        linhas = []
+        for h, d in sorted(ss.rio.variacoes().items()):
+            v = aval["projecao"][h]
+            marca = " · **transborda**" if v >= D.NIVEL_CRITICO else ""
+            linhas.append(f"| {h} h | {d:+.0f} cm | {v:.0f} cm{marca} |")
+        st.markdown("| horizonte | rio | água na régua |\n|---|---|---|\n"
+                    + "\n".join(linhas))
+
+    msg = ss.alerta.avaliar(nivel, aval, ss.rio.chuva_prevista_mm)
+    if msg:
+        ss.mensagens.insert(0, f"{time.strftime('%H:%M:%S')} · {msg}")
+        del ss.mensagens[5:]
+    if ss.mensagens:
+        st.markdown("#### Alertas enviados")
+        for m in ss.mensagens:
+            st.caption(m)
+
+
+def buscar_leitura(url):
+    with urllib.request.urlopen(f"{url}/leitura", timeout=3) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+@st.fragment(run_every=intervalo if ligada else None)
+def painel_rede():
+    try:
+        d = buscar_leitura(endereco)
+    except Exception as e:
+        st.error(f"Sem resposta da Raspberry em {endereco}: {e}")
+        st.caption("Confira se o servidor_camera.py está rodando e se os dois estão na mesma rede.")
+        return
+    if not d.get("pronto"):
+        st.info("A Raspberry está iniciando o modelo...")
+        return
+    st.caption(f"modelo na Raspberry: {d['ms']:.0f} ms · método: {d['metodo']}")
+    mostrar_info(d["nivel_cm"], d["numeros"], d.get("detalhe", ""))
 
 
 @st.fragment(run_every=intervalo if ligada else None)
@@ -158,47 +231,17 @@ def painel():
         st.caption(f"inferência: {ms:.0f} ms · método: {leitura.metodo}")
 
     with col_info:
-        if nivel is None:
-            st.markdown("### Procurando a régua")
-            st.caption(leitura.detalhe)
-            return
-
-        folga = D.NIVEL_CRITICO - nivel
-        m1, m2 = st.columns(2)
-        m1.metric("Nível na régua", f"{nivel:.0f} cm")
-        m2.metric("Folga até transbordar", f"{folga:.0f} cm")
-        vals = sorted({d.valor for d in numeros})
-        if vals:
-            st.caption("números detectados: " + " ".join(map(str, vals)))
-
-        aval = D.avaliar_previsao_local(nivel, ss.rio.variacoes())
-        urgencia = aval["urgencia"] if aval else None
-        st.markdown(selo(urgencia), unsafe_allow_html=True)
-
-        st.markdown("#### Previsão do rio")
-        if ss.rio.chuva_prevista_mm:
-            st.caption(f"chuva na bacia: {ss.rio.chuva_prevista_mm} mm em 12 h "
-                       "(cenário simulado)")
-        else:
-            st.caption("tempo firme, sem chuva prevista (cenário simulado)")
-
-        if aval:
-            linhas = []
-            for h, d in sorted(ss.rio.variacoes().items()):
-                v = aval["projecao"][h]
-                marca = " · **transborda**" if v >= D.NIVEL_CRITICO else ""
-                linhas.append(f"| {h} h | {d:+.0f} cm | {v:.0f} cm{marca} |")
-            st.markdown("| horizonte | rio | água na régua |\n|---|---|---|\n"
-                        + "\n".join(linhas))
-
-        msg = ss.alerta.avaliar(nivel, aval, ss.rio.chuva_prevista_mm)
-        if msg:
-            ss.mensagens.insert(0, f"{time.strftime('%H:%M:%S')} · {msg}")
-            del ss.mensagens[5:]
-        if ss.mensagens:
-            st.markdown("#### Alertas enviados")
-            for m in ss.mensagens:
-                st.caption(m)
+        mostrar_info(nivel, sorted({d.valor for d in numeros}), leitura.detalhe)
 
 
-painel()
+if fonte == REDE:
+    if ligada:
+        col_img, col_info = st.columns([3, 2], gap="large")
+        col_img.markdown(f'<img src="{endereco}/video" style="width:100%;border-radius:10px">',
+                         unsafe_allow_html=True)
+        with col_info:
+            painel_rede()
+    else:
+        st.info("Câmera desligada. Ligue na barra lateral.")
+else:
+    painel()
