@@ -23,6 +23,8 @@ import csv
 import glob
 import os
 import sys
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -303,9 +305,13 @@ def anotar(frame, resultado, leitura, numeros=None, gauges=None, surfaces=None):
     return img
 
 
-def abrir_camera(indice):
+def abrir_camera(indice, largura=640, altura=480, fps=15):
     """Abre a câmera com o backend certo para o sistema: DirectShow ou Media
-    Foundation no Windows, V4L2 no Linux da Raspberry."""
+    Foundation no Windows, V4L2 no Linux da Raspberry.
+
+    Pede MJPG em 640x480: muitas webcams entregam por padrão 720p ou 1080p em
+    formato bruto, e a Raspberry gasta mais CPU recebendo a imagem do que
+    rodando o modelo. O buffer de um quadro evita ler imagem atrasada."""
     if sys.platform.startswith("win"):
         backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF]
     else:
@@ -313,9 +319,102 @@ def abrir_camera(indice):
     for backend in backends:
         cap = cv2.VideoCapture(indice, backend)
         if cap.isOpened():
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, largura)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, altura)
+            cap.set(cv2.CAP_PROP_FPS, fps)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             return cap
         cap.release()
     return None
+
+
+class CameraAoVivo:
+    """Lê a câmera numa thread própria e guarda só o quadro mais recente.
+
+    Sem isso, enquanto o modelo processa um quadro a câmera enfileira os
+    seguintes, e a janela passa a mostrar imagens cada vez mais antigas."""
+
+    def __init__(self, cap):
+        self.cap = cap
+        self.quadro = None
+        self.trava = threading.Lock()
+        self.rodando = True
+        self.thread = threading.Thread(target=self._ler, daemon=True)
+        self.thread.start()
+
+    def _ler(self):
+        while self.rodando:
+            ok, quadro = self.cap.read()
+            if not ok:
+                time.sleep(0.01)
+                continue
+            with self.trava:
+                self.quadro = quadro
+
+    def ler(self):
+        with self.trava:
+            return None if self.quadro is None else self.quadro.copy()
+
+    def parar(self):
+        self.rodando = False
+        self.thread.join(timeout=1)
+        self.cap.release()
+
+
+class DetectorAoVivo:
+    """Roda o modelo numa thread própria sobre o quadro mais recente.
+
+    A janela desenha o vídeo na velocidade da câmera e usa o último resultado
+    disponível: as caixas atualizam algumas vezes por segundo, o que basta
+    para uma régua cujo nível muda em minutos."""
+
+    def __init__(self, modelo, camera, imgsz=640):
+        self.modelo = modelo
+        self.camera = camera
+        self.imgsz = imgsz
+        self.filtro = FiltroMediana()
+        self.resultado = None
+        self.trava = threading.Lock()
+        self.rodando = True
+        self.thread = threading.Thread(target=self._detectar, daemon=True)
+        self.thread.start()
+
+    def _detectar(self):
+        while self.rodando:
+            quadro = self.camera.ler()
+            if quadro is None:
+                time.sleep(0.02)
+                continue
+            t0 = time.perf_counter()
+            res = self.modelo.predict(quadro, imgsz=self.imgsz, verbose=False)[0]
+            ms = (time.perf_counter() - t0) * 1000
+            numeros, gauges, surfaces = extrair(res, self.modelo.names)
+            numeros = corrigir_deteccoes(numeros)
+            leitura = ler_nivel(numeros, gauges, surfaces)
+            suave = self.filtro.add(leitura.nivel_cm)
+            with self.trava:
+                self.resultado = {"res": res, "leitura": leitura, "numeros": numeros,
+                                  "gauges": gauges, "surfaces": surfaces,
+                                  "suave": suave, "ms": ms}
+
+    def ler(self):
+        with self.trava:
+            return self.resultado
+
+    def parar(self):
+        self.rodando = False
+        self.thread.join(timeout=2)
+
+
+def quadro_anotado(quadro, r):
+    """Desenha o último resultado do detector sobre o quadro atual."""
+    if r is None:
+        return quadro
+    img = anotar(quadro, r["res"], r["leitura"], r["numeros"], r["gauges"], r["surfaces"])
+    cv2.putText(img, f"modelo: {r['ms']:.0f} ms", (10, 22), cv2.FONT_HERSHEY_SIMPLEX,
+                0.55, (245, 245, 245), 2, cv2.LINE_AA)
+    return img
 
 
 def processar_imagem(modelo, caminho, imgsz, salvar_em=None):
@@ -410,22 +509,19 @@ def main():
         if cap is None:
             print("não foi possível abrir a câmera", args.webcam)
             return
-        filtro = FiltroMediana()
+        camera = CameraAoVivo(cap)
+        detector = DetectorAoVivo(modelo, camera, args.imgsz)
         print("q para sair")
         while True:
-            ok, frame = cap.read()
-            if not ok:
+            quadro = camera.ler()
+            if quadro is None:
+                time.sleep(0.01)
+                continue
+            cv2.imshow("HidroVision", quadro_anotado(quadro, detector.ler()))
+            if cv2.waitKey(30) & 0xFF == ord("q"):
                 break
-            res = modelo.predict(frame, imgsz=args.imgsz, verbose=False)[0]
-            numeros, gauges, surfaces = extrair(res, modelo.names)
-            numeros = corrigir_deteccoes(numeros)
-            leitura = ler_nivel(numeros, gauges, surfaces)
-            suave = filtro.add(leitura.nivel_cm)
-            img = anotar(frame, res, leitura, numeros, gauges, surfaces)
-            cv2.imshow("HidroVision", img)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
-        cap.release()
+        detector.parar()
+        camera.parar()
         cv2.destroyAllWindows()
         return
 

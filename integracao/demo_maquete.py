@@ -312,7 +312,8 @@ def main():
         print("não foi possível abrir a câmera", args.webcam)
         return
 
-    filtro = V.FiltroMediana()
+    camera = V.CameraAoVivo(cap)
+    detector = V.DetectorAoVivo(modelo, camera, args.imgsz)
     ultimo = 0.0
     inicio = time.time()
     chuva_entrou = False
@@ -320,14 +321,11 @@ def main():
     aval = None
     print("c previsão de chuva | n tempo firme | s salvar tela | r recalcular | q sair")
     while True:
-        ok, frame = cap.read()
-        if not ok:
-            break
-        res = modelo.predict(frame, imgsz=args.imgsz, verbose=False)[0]
-        numeros, gauges, surfaces = V.extrair(res, modelo.names)
-        numeros = V.corrigir_deteccoes(numeros)
-        leitura = V.ler_nivel(numeros, gauges, surfaces)
-        suave = filtro.add(leitura.nivel_cm)
+        frame = camera.ler()
+        if frame is None:
+            time.sleep(0.01)
+            continue
+        r = detector.ler()
 
         agora = time.time()
         if args.auto_chuva and not chuva_entrou and agora - inicio >= args.auto_chuva:
@@ -335,19 +333,21 @@ def main():
             rio.trocar("chuva")
             print("  previsão de chuva entrou no cenário")
 
+        suave = r["suave"] if r else None
         if suave is not None and agora - ultimo >= args.intervalo:
             ultimo = agora
+            leitura, numeros = r["leitura"], r["numeros"]
             menor = min((d.valor for d in numeros), default=None)
             ciclo_demo(p, suave, leitura.metodo, leitura.confianca, menor, None)
             estado = p.estado_atual()
             aval = avaliar_previsao_local(suave, rio.variacoes())
             alerta.avaliar(suave, aval, rio.chuva_prevista_mm)
 
-        img = V.anotar(frame, res, leitura, numeros, gauges, surfaces)
+        img = V.quadro_anotado(frame, r)
         img = desenhar_painel(img, linhas_painel(estado, rio, aval), cv2)
         cv2.imshow("HidroVision - DEMO maquete", img)
 
-        tecla = cv2.waitKey(1) & 0xFF
+        tecla = cv2.waitKey(30) & 0xFF
         if tecla == ord("q"):
             break
         if tecla == ord("c"):
@@ -362,7 +362,8 @@ def main():
             print("  tela salva em", nome)
         if tecla == ord("r"):
             rio.prever()
-    cap.release()
+    detector.parar()
+    camera.parar()
     cv2.destroyAllWindows()
 
 
