@@ -1,19 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-pipeline.py — HidroVision AI (Fase 3)
-Orquestrador: recebe cada leitura da câmera, grava no banco, calcula a
-tendência, roda a previsão e avalia os alertas. É a função que o loop do
-Raspberry Pi (e o dashboard) chamam.
-
-Uso típico no loop da câmera:
-
-    from fase3 import pipeline
-    p = pipeline.Pipeline(modo="maquete", pasta_modelos="modelosPreditivos")
-    ...
-    resultado = p.processar_leitura(nivel_cm=48.2, metodo="geometria",
-                                    confianca=0.71, menor_numero=50)
-    # resultado traz nivel gravado, tendência, previsões e alertas gerados
-"""
+"""Orquestrador: liga leitura, tendência, previsão e alertas a cada ciclo."""
 from dataclasses import dataclass, field
 
 import pandas as pd
@@ -47,15 +33,13 @@ class Pipeline:
             print(f"[aviso] {e} — rodando sem previsão")
             self.preditor = None
         self.prever_a_cada = pd.Timedelta(minutes=prever_a_cada_min)
-        # janela do filtro de mediana. 3 é o equilíbrio para leitura em degraus:
-        # ainda descarta uma detecção espúria isolada, mas confirma um degrau
-        # real em 2 leituras em vez de 3 (menos atraso no alerta).
+        # 3 é o equilíbrio: descarta detecção espúria isolada, mas confirma
+        # um degrau real em 2 leituras em vez de 3 (menos atraso no alerta).
         self.janela_mediana = janela_mediana
         self._ultima_projecao = None
         self._ultima_previsao_ts = None
         self._ultimas_previsoes = None
 
-    # ------------------------------------------------------------------
     def processar_leitura(self, nivel_cm, metodo="", confianca=None,
                           menor_numero=None, ts=None):
         """Chamada a cada leitura da câmera. Faz todo o ciclo."""
@@ -90,9 +74,7 @@ class Pipeline:
         self._ultima_previsao_ts = agora
         return self._ultimas_previsoes
 
-    # ------------------------------------------------------------------
     # utilidades para o dashboard
-    # ------------------------------------------------------------------
     def estado_atual(self):
         """Snapshot para o card de status do dashboard."""
         ult = self.banco.ultima_leitura()

@@ -23,9 +23,9 @@ from dataclasses import dataclass, replace
 import numpy as np
 
 PASSO_CM = 10           # régua com marcações de 10 em 10 cm
-TOL_CM = 4.0            # divergência tolerada entre rótulo e posição
+TOL_CM = 4.0
 CONF_INTOCAVEL = 0.75   # acima disso, só corrige com evidência muito forte
-MIN_INLIERS = 3         # mínimo de detecções concordantes para confiar na reta
+MIN_INLIERS = 3
 
 
 @dataclass
@@ -57,11 +57,8 @@ def _r2(valores, ys, a, b):
 
 
 def ajustar_robusto(dets, tol_cm=TOL_CM):
-    """
-    Encontra a reta valor->posição com maior consenso.
-    Testa todos os pares (dets é pequeno: no máximo ~11 números).
-    Retorna Ajuste ou None.
-    """
+    """Encontra a reta valor->posição com maior consenso, testando todos os
+    pares (dets é pequeno: no máximo ~11 números). Retorna Ajuste ou None."""
     if len(dets) < 2:
         return None
 
@@ -111,11 +108,8 @@ def _arredondar_passo(valor, passo=PASSO_CM):
 
 
 def corrigir(dets, tol_cm=TOL_CM, passo=PASSO_CM):
-    """
-    Corrige rótulos usando a geometria.
-    Retorna (dets_corrigidas, ajuste, relatorio).
-    relatorio: lista de strings descrevendo cada correção feita.
-    """
+    """Corrige rótulos usando a geometria. Retorna (dets_corrigidas, ajuste,
+    relatorio), onde relatorio lista as correções feitas."""
     relatorio = []
     if len(dets) < 2:
         return list(dets), None, relatorio
@@ -169,11 +163,8 @@ def corrigir(dets, tol_cm=TOL_CM, passo=PASSO_CM):
 
 
 def detectar_lacunas(dets, ajuste, passo=PASSO_CM, tol_cm=TOL_CM):
-    """
-    Encontra números que deveriam estar visíveis entre o menor e o maior
-    detectado, mas não foram detectados (miss do detector).
-    Retorna lista de valores faltantes.
-    """
+    """Encontra números que deveriam estar visíveis entre o menor e o maior
+    detectado, mas não foram (miss do detector). Retorna os valores faltantes."""
     if not dets or ajuste is None:
         return []
     valores = sorted(d.valor for d in dets)
@@ -183,12 +174,8 @@ def detectar_lacunas(dets, ajuste, passo=PASSO_CM, tol_cm=TOL_CM):
 
 
 def nivel_por_geometria(dets, ajuste, lacunas, passo=PASSO_CM):
-    """
-    Estima o nível considerando que pode haver um número submerso não detectado
-    logo abaixo do menor visível.
-
-    Retorna (nivel_cm, observacao).
-    """
+    """Estima o nível considerando que pode haver um número submerso não
+    detectado logo abaixo do menor visível. Retorna (nivel_cm, observacao)."""
     if not dets or ajuste is None:
         return None, "sem ajuste geométrico"
     menor = min(dets, key=lambda d: d.valor)

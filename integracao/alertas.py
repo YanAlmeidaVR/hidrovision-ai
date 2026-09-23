@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-alertas.py — HidroVision AI (Fase 3)
-
 Dois tipos de alerta INDEPENDENTES, porque descrevem situações diferentes:
 
 1. NÍVEL — a água está a X cm na régua. É um fato, vale em qualquer direção.
@@ -24,9 +22,6 @@ import pandas as pd
 
 import projecao as PJ
 
-# ----------------------------------------------------------------------
-# limiares de NÍVEL por modo de operação
-# ----------------------------------------------------------------------
 MODOS = {
     # régua urbana da maquete: 100 cm = a água atinge a área urbana
     "maquete": {"atencao": 40, "alerta": 70, "emergencia": 90,
@@ -39,9 +34,6 @@ ORDEM = ("atencao", "alerta", "emergencia")
 NOMES = {"atencao": "ATENÇÃO", "alerta": "ALERTA", "emergencia": "EMERGÊNCIA"}
 
 
-# ----------------------------------------------------------------------
-# canais de envio (Telegram entra aqui)
-# ----------------------------------------------------------------------
 class CanalConsole:
     def enviar(self, mensagem):
         print(f"  >> {mensagem}")
@@ -89,7 +81,6 @@ class CanalTelegram:
         self._fila = []
         self._ultimo_envio = 0.0
 
-    # ------------------------------------------------------------------
     def _post(self, texto):
         import requests
         r = requests.post(f"{self.API}/bot{self.token}/sendMessage",
@@ -101,7 +92,6 @@ class CanalTelegram:
         return r.json()
 
     def _formatar(self, mensagem):
-        """Deixa a mensagem legível no aplicativo."""
         icones = {"EMERGÊNCIA": "\U0001F6A8", "ALERTA": "\u26A0\uFE0F",
                   "ATENÇÃO": "\U0001F4E2", "Normalizado": "\u2705",
                   "Cancelado": "\u2139\uFE0F"}
@@ -109,7 +99,6 @@ class CanalTelegram:
         agora = pd.Timestamp.now(tz="America/Sao_Paulo").strftime("%d/%m %H:%M")
         return f"{icone} <b>HidroVision AI</b> · {agora}\n{mensagem}"
 
-    # ------------------------------------------------------------------
     def enviar(self, mensagem):
         self._fila.append(self._formatar(mensagem))
         if len(self._fila) > self.max_fila:      # descarta o mais antigo
@@ -173,7 +162,6 @@ class Evento:
         return self.mensagem
 
 
-# ----------------------------------------------------------------------
 @dataclass
 class GerenciadorAlertas:
     modo: str = "maquete"
@@ -182,7 +170,6 @@ class GerenciadorAlertas:
     _nivel_armado: dict = field(default_factory=dict)
     _traj_armada: str | None = None      # urgência atualmente ativa
 
-    # ------------------------------------------------------------------
     def trocar_modo(self, modo):
         if modo not in MODOS:
             raise ValueError(f"modo inválido: {modo} (use {list(MODOS)})")
@@ -203,7 +190,6 @@ class GerenciadorAlertas:
     def nivel_critico(self):
         return MODOS[self.modo]["critico"]
 
-    # ------------------------------------------------------------------
     def avaliar(self, nivel_cm, tendencia=None, df_recente=None, ts=None):
         """
         Avalia as duas categorias e devolve (eventos, projecao).
@@ -217,7 +203,6 @@ class GerenciadorAlertas:
         eventos += self._avaliar_trajetoria(proj, ts)
         return eventos, proj
 
-    # ---------------- categoria 1: NÍVEL ----------------
     def _avaliar_nivel(self, nivel, tendencia, ts):
         eventos = []
         if nivel is None:
@@ -247,7 +232,6 @@ class GerenciadorAlertas:
                 eventos.append(Evento("nivel", tipo, "normalizado", nivel, msg))
         return eventos
 
-    # ---------------- categoria 2: TRAJETÓRIA ----------------
     def _avaliar_trajetoria(self, proj, ts):
         eventos = []
         urg = proj.urgencia if proj.estado == "subindo" else None
@@ -288,7 +272,6 @@ class GerenciadorAlertas:
                                   proj.nivel_cm, msg))
         return eventos
 
-    # ------------------------------------------------------------------
     def _emitir(self, categoria, tipo, estado, valor, mensagem, ts):
         for canal in self.canais:
             try:

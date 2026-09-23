@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-preditor.py — HidroVision AI (Fase 3)
 Carrega os modelos XGBoost e prevê o nível futuro a partir da série horária
 do banco. Também expõe a simulação de chuva (usada pelo slider do dashboard).
 
@@ -74,7 +73,6 @@ class Preditor:
         # poderem dizer ao operador em vez de só omitir o número
         self.motivo = None
 
-    # ------------------------------------------------------------------
     def _linha_atual(self, serie_horaria, tolerancia_h=TOLERANCIA_H):
         """
         Última linha de features COMPLETA e RECENTE da série do banco.
@@ -128,7 +126,6 @@ class Preditor:
             out[f"{h}h"] = round(float(linha["nivel"]) + delta, 1)
         return out
 
-    # ------------------------------------------------------------------
     def simular_chuva(self, serie_horaria, chuva_mmh, horas_de_chuva=6):
         """
         Slider do dashboard: injeta uma chuva hipotética nas features e

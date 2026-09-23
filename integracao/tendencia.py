@@ -1,27 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-tendencia.py — HidroVision AI (Fase 3)
 Tendência do nível em cm/h.
 
-O problema que este módulo resolve: a leitura da régua pode vir em duas
-resoluções distintas.
+A leitura da régua vem em duas resoluções: FINA (~2-3 cm, dois ou mais
+números detectados, interpolada) ou GROSSA (degraus de 10 cm, só um número
+visível). Regressão linear funciona bem na fina, mas na grossa a série vira
+escada e a inclinação oscila entre 0 e valores absurdos conforme quantos
+degraus caem na janela.
 
-  - FINA (~2-3 cm): quando há dois ou mais números detectados, a escala px/cm
-    sai do espaçamento de 10 cm entre eles e a linha d'água é interpolada.
-  - GROSSA (degraus de 10 cm): quando só um número está visível, a leitura é
-    o próprio valor do menor número — muda apenas quando a água cruza um
-    múltiplo de 10.
-
-Regressão linear simples funciona bem na resolução fina e falha na grossa: a
-série vira uma escada e a inclinação oscila entre 0 e valores absurdos,
-dependendo de quantos degraus caem dentro da janela.
-
-A solução usada aqui:
-  1. detecta automaticamente se a série está quantizada;
-  2. na série fina, regressão sobre os valores, janela curta (30 min);
-  3. na série grossa, mede o TEMPO ENTRE CRUZAMENTOS de degrau — se a água
-     levou 40 min para ir de 50 para 60, a taxa é 10 cm / 0,667 h = 15 cm/h —
-     com janela longa (2 h) e sem depender do valor bruto.
+Por isso: série fina usa regressão (janela de 30 min); série grossa mede o
+TEMPO ENTRE CRUZAMENTOS de degrau (ex.: 40 min de 50 a 60 cm = 15 cm/h),
+com janela de 2 h, sem depender do valor bruto.
 """
 from dataclasses import dataclass
 
@@ -124,7 +113,6 @@ def calcular(df, col_ts="ts", col_nivel="nivel_cm",
     t_sub = pd.to_datetime(sub[col_ts])
     y = sub[col_nivel].to_numpy(dtype=float)
 
-    # ---------- leitura em degraus: taxa por cruzamentos ----------
     if quantizada:
         taxa, n_cruz = _taxa_por_cruzamentos(t_sub, y, passo)
         if taxa is None:
@@ -137,7 +125,6 @@ def calcular(df, col_ts="ts", col_nivel="nivel_cm",
         return Tendencia(taxa, _rotular(taxa, banda), len(sub), resolucao=res,
                          detalhe=f"{n_cruz} cruzamento(s) em {janela_min} min")
 
-    # ---------- leitura fina: regressão linear ----------
     t = (t_sub - t_sub.min()).dt.total_seconds().to_numpy() / 3600.0
     if np.allclose(y, y[0]):
         return Tendencia(0.0, "estavel", len(sub), 1.0, res,

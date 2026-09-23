@@ -1,40 +1,20 @@
 # -*- coding: utf-8 -*-
-"""
-demo_maquete.py — HidroVision AI
-Demonstração ao vivo: câmera lendo a régua da maquete + cenário simulado do
-rio alimentando os modelos XGBoost.
+"""Demonstração ao vivo: câmera lendo a régua da maquete + cenário simulado
+do rio alimentando os modelos XGBoost.
 
-O que é real e o que é simulado nesta demo:
+REAL: a leitura da régua (YOLO26 + geometria), a tendência, a projeção e os
+alertas — e os três modelos XGBoost, que são os mesmos arquivos usados em
+campo. SIMULADO: a série do rio que alimenta os modelos — numa feira não há
+cheia acontecendo, então a demo injeta um evento fictício e o modelo prevê
+de verdade sobre essa entrada fictícia.
 
-  REAL   a leitura da régua pela câmera (modelo YOLO26 + correção geométrica),
-         a tendência calculada do histórico da própria câmera, a projeção de
-         quanto falta para os 100 cm e os alertas do módulo de alertas.
-  REAL   os três modelos XGBoost — são os mesmos arquivos usados em campo.
-  SIMULADO  a série do rio que alimenta os modelos. Numa feira não há enchente
-         acontecendo, então a demo injeta um evento de cheia fictício para que
-         o modelo responda. Os números que ele devolve são previsão de verdade
-         sobre entrada fictícia, não valores escritos à mão.
+Os modelos foram treinados na escala da estação (14-447 cm); a maquete opera
+em 0-100 cm e enche em minutos, por isso as duas escalas ficam separadas na
+tela, sem se misturar.
 
-Os modelos foram treinados na estação 61305000, onde o nível vive entre 14 e
-447 cm. A maquete opera em 0 a 100 cm e enche em minutos, então alimentar os
-modelos com a escala da maquete daria previsão sem sentido. Por isso as duas
-escalas aparecem separadas na tela.
-
-Banco separado (demo_maquete.db) e alertas marcados como DEMO: o monitor real
-(monitor.py, banco hidrovision.db) não é tocado.
-
-A água fica parada. Quem dispara o alerta é a previsão: o modelo lê a chuva
-prevista na bacia, estima a variação do nível e essa variação é somada à
-leitura da régua. Se a subida prevista passar da folga até os 100 cm, o
-sistema alerta antes de a água se mexer — que é o comportamento útil em campo.
-
-Uso:
-    python demo_maquete.py --webcam 1
-    python demo_maquete.py --webcam 1 --auto-chuva 20
-    python demo_maquete.py --sem-camera
-
-Teclas: c dispara a previsão de chuva | n volta ao tempo firme
-        s salva a tela | r recalcula | q sai
+Banco separado (demo_maquete.db) e alertas marcados como DEMO — não toca no
+monitor real. A água fica parada: quem dispara o alerta é a previsão, que
+soma a variação estimada do rio à leitura da régua.
 """
 import argparse
 import os
@@ -82,16 +62,9 @@ def canais_demo(telegram=True):
 
 
 class RioSimulado:
-    """Série horária fictícia do rio, em dois cenários.
-
-    tempo firme: rio estável, sem chuva — o modelo corretamente prevê que
-                 nada acontece, e o sistema fica em silêncio.
-    chuva:       frente de chuva sobre a bacia alta e rio já subindo — é a
-                 entrada que faz o modelo projetar a cheia.
-
-    O que o modelo devolve é previsão de verdade; fictícia é só a série que
-    entra, porque numa feira não há enchente acontecendo.
-    """
+    """Série horária fictícia do rio, em dois cenários: 'firme' (estável,
+    sem chuva) e 'chuva' (frente sobre a bacia alta, força o modelo a
+    projetar a cheia)."""
 
     CENARIOS = {
         "firme": {"nivel_agora": 170.0, "base": 165.0, "horas_evento": 6,

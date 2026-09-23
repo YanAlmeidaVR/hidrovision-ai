@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-projecao.py — HidroVision AI (Fase 3)
-
 A régua não mede o rio: ela fica no ponto onde a água chega à área urbana.
 O zero é o nível de referência e os 100 cm são o ponto crítico — quando a
 lâmina alcança essa marca, a água atinge a cidade.
@@ -141,19 +139,16 @@ def projetar(nivel_cm, tendencia, df_recente=None,
         return Projecao("indefinido", nivel_cm, None, folga, None, acel,
                         detalhe=tendencia.detalhe or "tendência indefinida")
 
-    # --- estável: a extrapolação não se aplica ---
     if abs(taxa) < TAXA_MINIMA:
         return Projecao("estavel", nivel_cm, taxa, folga, None, acel,
                         detalhe="nível estável — projeção não se aplica")
 
-    # --- descendo: informa o recuo, sem urgência de trajetória ---
     if taxa < 0:
         horas_saida = abs(nivel_cm / taxa) if nivel_cm > 0 else 0.0
         return Projecao("descendo", nivel_cm, taxa, folga, None, acel,
                         detalhe=f"recuo; sai da régua em ~{horas_saida:.1f} h "
                                 f"no ritmo atual")
 
-    # --- subindo: projeta o tempo até o nível crítico ---
     if folga <= 0:
         return Projecao("subindo", nivel_cm, taxa, folga, 0.0, acel,
                         urgencia="emergencia",

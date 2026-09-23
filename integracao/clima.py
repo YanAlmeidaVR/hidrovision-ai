@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-clima.py — HidroVision AI
-
 Chuva pela API do Open-Meteo (gratuita, sem chave de acesso).
 
 Duas leituras, com papéis diferentes, porque a água chega de dois jeitos:
@@ -93,9 +91,6 @@ class Clima:
     def __init__(self, lat=LAT_BACIA, lon=LON_BACIA):
         self.lat, self.lon = lat, lon
 
-    # ------------------------------------------------------------------
-    # previsão (alimenta os modelos do rio)
-    # ------------------------------------------------------------------
     def previsao(self, horas=24):
         """
         Previsão horária:
@@ -118,14 +113,7 @@ class Clima:
         }
 
     def resumo(self, horas=24):
-        """
-        Condensa a previsão nos números que interessam ao preditor:
-          total_mm    chuva acumulada prevista no período
-          media_mmh   intensidade média, injetada nas features
-          pico_mmh    maior intensidade horária prevista
-          prob_max    maior probabilidade de precipitação
-          horas_chuva quantas horas com chuva acima de 0,1 mm
-        """
+        """Condensa a previsão nos números que o preditor usa como features."""
         p = self.previsao(horas)
         chuva = p["chuva_mm"]
         if not chuva:
@@ -142,16 +130,11 @@ class Clima:
                            if p.get("temp") else None),
         }
 
-    # ------------------------------------------------------------------
-    # condição observada agora (alimenta o alerta local)
-    # ------------------------------------------------------------------
     def agora(self, horas_passadas=6):
         """
-        Chuva caindo agora e acumulada nas últimas horas.
-
-        Devolve dict com mmh, acum_mm, horas_acum, intensidade, temp e
-        horario. Devolve None se a API não responder: faltar a condição local
-        não pode derrubar o ciclo do rio.
+        Chuva caindo agora e acumulada nas últimas horas. Devolve None se a
+        API não responder: faltar a condição local não pode derrubar o ciclo
+        do rio.
         """
         try:
             r = requests.get(API, params={
@@ -193,13 +176,9 @@ class Clima:
 
 def avaliar_local(local):
     """
-    Risco de alagamento urbano a partir da chuva na cidade.
-
-    Regra direta sobre intensidade e acumulado, sem passar pelos modelos do
-    rio: a água que cai aqui vai para a drenagem, não para o leito
+    Risco de alagamento urbano a partir da chuva na cidade, sem passar pelos
+    modelos do rio: a água que cai aqui vai para a drenagem, não para o leito
     monitorado, e alaga antes de o rio subir.
-
-    Devolve (nivel, motivo), com nivel em normal | atencao | alerta.
     """
     if not local:
         return "normal", None

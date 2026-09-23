@@ -1,22 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-dashboard.py — HidroVision AI (Fase 4)
+Painel de monitoramento (streamlit run dashboard.py).
 
-Painel de monitoramento. Roda com:
-
-    streamlit run dashboard.py
-
-Duas abas, com propósitos distintos:
-
-  MONITORAMENTO  o estado real: leitura da estação ou da régua, tendência,
-                 previsão e alertas gravados. Nada é inventado aqui.
-
-  SIMULAÇÃO      cenários hipotéticos de chuva. Serve para responder "e se
-                 chover forte a semana toda?" sem esperar chover, e para
-                 demonstrar o alerta antecipado na apresentação.
-
-A separação é deliberada: misturar o observado com o hipotético na mesma
-tela é como um painel de alerta perde credibilidade.
+MONITORAMENTO mostra só o estado real; SIMULAÇÃO roda cenários hipotéticos
+de chuva. Separadas de propósito — misturar observado com hipotético tira a
+credibilidade do painel.
 """
 import os
 import sys
@@ -34,9 +22,7 @@ import pipeline as PL
 import monitor as M
 import clima as C
 
-# ----------------------------------------------------------------------
 # paleta (a mesma dos slides)
-# ----------------------------------------------------------------------
 NAVY = "#0B2239"
 TEAL = "#0E7490"
 TEAL_CLARO = "#7DD3FC"
@@ -54,10 +40,8 @@ CORES_RISCO = {"normal": VERDE, "atencao": AMBER,
 NOMES_RISCO = {"normal": "Situação normal", "atencao": "Atenção",
                "alerta": "Alerta", "emergencia": "Emergência"}
 
-# Faixas de intensidade conforme a classificação meteorológica usual.
-# A duração de cada cenário é o que o distingue: 50 mm/h por duas horas é
-# um temporal; 8 mm/h por um dia inteiro é uma frente estacionada, e é essa
-# que costuma encher o rio.
+# a duração é o que distingue os cenários: 50 mm/h por 2 h é um temporal;
+# 8 mm/h por um dia inteiro é frente estacionada, e é essa que enche o rio
 CENARIOS = {
     "Sem chuva": (0.0, 6, "o rio segue apenas a própria recessão"),
     "Garoa persistente": (2.0, 12, "chuva fraca, mas contínua por meio dia"),
@@ -190,9 +174,6 @@ def descrever_clima(clima):
                 if isinstance(mm, (int, float)) else "previsão obtida")
 
 
-# ----------------------------------------------------------------------
-# barra lateral: só a fonte de dados
-# ----------------------------------------------------------------------
 st.sidebar.markdown('<div class="hv-marca">HidroVision AI</div>'
                     '<div class="hv-sub">Painel de monitoramento</div>',
                     unsafe_allow_html=True)
@@ -238,8 +219,9 @@ p = PL.Pipeline(modo=modo, db=db, pasta_modelos=pasta_modelos,
                 prever_a_cada_min=0)
 estado = p.estado_atual()
 
-# O estado_atual usa janela fixa de 3 h, dimensionada para a câmera lendo a
-# cada 30-60 s. Com a estação publicando de hora em hora, sobra um ponto só.
+# estado_atual usa janela fixa de 3h (dimensionada pra câmera); com a
+# estação publicando de hora em hora isso daria só um ponto, por isso
+# recalcula com a janela escolhida na barra lateral
 import tendencia as T
 import projecao as PJ
 _recente = p.banco.serie_recente(horas=max(janela_tend, 3))
@@ -266,9 +248,6 @@ if ult is None:
 nivel = float(ult["nivel_cm"])
 aba_mon, aba_sim = st.tabs(["  Monitoramento  ", "  Simulação de chuva  "])
 
-# ======================================================================
-# ABA 1 — MONITORAMENTO
-# ======================================================================
 with aba_mon:
     esq, dir_ = st.columns([3, 1], gap="large")
     with esq:
@@ -301,8 +280,7 @@ with aba_mon:
             mon.banco.fechar()
             st.session_state["ciclo"] = {
                 "quando": pd.Timestamp.now(tz=B.FUSO), "ana_fora": fora}
-            # contador de tentativas seguidas com a ANA fora, para o painel
-            # dizer há quanto tempo o serviço não responde
+            # conta tentativas seguidas com a ANA fora, pra mostrar há quanto tempo
             if fora:
                 st.session_state["ana_falhas"] = \
                     st.session_state.get("ana_falhas", 0) + 1
@@ -344,10 +322,8 @@ with aba_mon:
             st.markdown(f'<div class="hv-info">{txt}</div>',
                         unsafe_allow_html=True)
 
-    # Recarrega sozinho no intervalo escolhido. Quando a ANA está fora, usa o
-    # intervalo curto: o serviço volta em minutos, e insistir é o que garante
-    # que a série não fique com buraco. É o mesmo princípio da retentativa do
-    # monitor, só que visível para quem está olhando a tela.
+    # recarrega sozinho; com a ANA fora usa o intervalo curto pra não deixar
+    # buraco na série — mesmo princípio da retentativa do monitor, mas visível
     if auto:
         espera = retry_min if falhas else intervalo_min
         st.markdown(
@@ -416,9 +392,6 @@ with aba_mon:
         f'emergência {limiares["emergencia"]:.0f} · crítico {critico:.0f} cm'
         f'</div>', unsafe_allow_html=True)
 
-    # ------------------------------------------------------------------
-    # previsão: só o número que interessa — atual, 6 h e 12 h
-    # ------------------------------------------------------------------
     st.markdown("<hr>", unsafe_allow_html=True)
     st.markdown("## Previsão do nível")
 
@@ -454,9 +427,7 @@ with aba_mon:
                                      nota="sem previsão para este horizonte"),
                                 unsafe_allow_html=True)
 
-    # ------------------------------------------------------------------
-    # chuva: bacia alta (alimenta os modelos) e cidade (alerta local)
-    # ------------------------------------------------------------------
+    # chuva da bacia alimenta os modelos do rio; chuva da cidade é alerta local
     st.markdown("<hr>", unsafe_allow_html=True)
     st.markdown("## Chuva")
 
@@ -583,9 +554,6 @@ with aba_mon:
         st.dataframe(tabela, use_container_width=True, hide_index=True,
                      height=min(360, 40 + 35 * len(tabela)))
 
-# ======================================================================
-# ABA 2 — SIMULAÇÃO
-# ======================================================================
 with aba_sim:
     st.markdown("## Cenários de chuva")
     st.markdown(
@@ -658,7 +626,6 @@ with aba_sim:
                             nota=f"variação de {v - atual:+.0f} cm sobre o "
                                  f"nível atual"), unsafe_allow_html=True)
 
-                    # curva comparativa
                     agora = pd.Timestamp.now(tz=B.FUSO).floor("h")
                     linhas = []
                     for rot, d in (("sem a chuva", base), ("com a chuva", sim)):

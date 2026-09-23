@@ -19,9 +19,7 @@ FUSO = "America/Sao_Paulo"
 HORIZONTES = (6, 12, 24)
 
 
-# ----------------------------------------------------------------------
 # features e alvo (variação), idênticos ao treino de produção
-# ----------------------------------------------------------------------
 def carregar(caminho):
     df = pd.read_csv(caminho, parse_dates=["datahora"])
     df["datahora"] = pd.to_datetime(df["datahora"], utc=True).dt.tz_convert(FUSO)
@@ -75,7 +73,6 @@ def mae(y, pred):
     return float(np.mean(np.abs(np.asarray(pred) - np.asarray(y))))
 
 
-# ----------------------------------------------------------------------
 def otimizar_horizonte(X, tentativas):
     Xtr, ytr, Xva, yva, Xte, yte = separar_temporal(X)
 

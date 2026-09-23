@@ -2,12 +2,10 @@
 """
 Página do dashboard: régua da maquete ao vivo.
 
-A câmera lê a régua com o modelo YOLO e a correção geométrica. O bloco de
-previsão usa os modelos XGBoost reais sobre um cenário de rio simulado, porque
-numa feira não há cheia acontecendo; a variação prevista é somada à leitura
-da régua para dizer se e quando a água transbordaria.
-
-O monitor do rio real continua na página principal do dashboard.
+Não há cheia real numa feira, então a previsão roda sobre um cenário de rio
+simulado (modelos XGBoost reais) e a variação prevista é somada à leitura da
+régua pra dizer se e quando a água transbordaria. O monitor do rio real fica
+na página principal do dashboard.
 """
 import json
 import sys

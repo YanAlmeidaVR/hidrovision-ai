@@ -36,15 +36,15 @@ from ultralytics.utils.plotting import colors as PALETA
 try:
     import geometria as G
     GEOMETRIA = True
-except ImportError:      # roda sem correção geométrica se o módulo faltar
+except ImportError:
     GEOMETRIA = False
     print("aviso: geometria.py não encontrado — correção geométrica desativada")
 
 # classes numéricas do modelo (as demais são gauge e surface)
 NUMERICAS = {"0", "10", "20", "30", "40", "50", "60", "70", "80", "90", "100"}
-CONF_MIN = 0.35          # confiança mínima para considerar uma detecção
-CONF_SURFACE = 0.60      # surface só entra se vier bem confiante
-JANELA_MEDIANA = 5       # leituras para o filtro de mediana
+CONF_MIN = 0.35
+CONF_SURFACE = 0.60
+JANELA_MEDIANA = 5
 
 
 @dataclass
@@ -98,11 +98,9 @@ def extrair(resultado, nomes):
 
 
 def escala_px_por_cm(numeros):
-    """
-    Estima px/cm por regressão linear entre valor (cm) e posição vertical (px).
-    Usa todos os números detectados — mais robusto que só o par mais próximo.
-    Retorna (px_por_cm, r2) ou (None, 0) se não der.
-    """
+    """Estima px/cm por regressão linear entre valor (cm) e posição vertical
+    (px), usando todos os números detectados. Retorna (px_por_cm, r2) ou
+    (None, 0) se não der."""
     if len(numeros) < 2:
         return None, 0.0
     valores = np.array([n.valor for n in numeros], dtype=float)
@@ -208,8 +206,7 @@ def faixa_do_nivel(leitura, numeros=None):
 
 
 def corrigir_deteccoes(numeros):
-    """Aplica a correção geométrica antes da leitura, para que o desenho e o
-    texto mostrem os rótulos já corrigidos pela posição na régua."""
+    """Aplica a correção geométrica antes da leitura, para desenho e leitura usarem os mesmos rótulos."""
     if not GEOMETRIA or len(numeros) < 2:
         return numeros
     corrigidas, _, _ = G.corrigir(numeros)
@@ -250,13 +247,8 @@ def desenhar(frame, numeros, gauges, surfaces):
 
 
 def anotar(frame, resultado, leitura, numeros=None, gauges=None, surfaces=None):
-    """
-    Desenha as detecções do YOLO e uma faixa inferior enxuta com:
-      - os números efetivamente reconhecidos (após a correção geométrica);
-      - quais números faltaram na sequência, quando há falha de detecção.
-
-    Sem barra lateral e sem texto sobreposto: a imagem fica livre para as caixas.
-    """
+    """Desenha as detecções do YOLO e uma faixa inferior com os números
+    reconhecidos e os que faltaram na sequência."""
     base = frame if frame is not None else resultado.orig_img
     img = desenhar(base, numeros or [], gauges or [], surfaces or [])
     h, w = img.shape[:2]
@@ -266,7 +258,7 @@ def anotar(frame, resultado, leitura, numeros=None, gauges=None, surfaces=None):
     VERM = (60, 60, 235)
     BRANCO = (245, 245, 245)
 
-    linhas = []          # (texto, cor)
+    linhas = []
     if leitura.nivel_cm is None:
         cor = AMBAR if leitura.metodo == "sem_numeros" else VERM
         linhas.append(("regua detectada - nenhum numero visivel"
@@ -442,7 +434,6 @@ def main():
     montar_paleta(modelo.names)
     print(f"modelo: {args.modelo} | classes: {len(modelo.names)}")
 
-    # ---------- imagem única ----------
     if args.imagem:
         saida = None
         if args.salvar_anotadas:
@@ -459,7 +450,6 @@ def main():
                   f"conf {r.confianca:.2f} | {r.n_numeros} números | {r.detalhe}")
         return
 
-    # ---------- pasta de imagens ----------
     if args.pasta:
         arquivos = sorted(sum([glob.glob(os.path.join(args.pasta, e))
                                for e in ("*.jpg", "*.jpeg", "*.png", "*.JPG")], []))
@@ -503,7 +493,6 @@ def main():
             print("csv salvo em", args.csv)
         return
 
-    # ---------- webcam ----------
     if args.webcam is not None:
         cap = abrir_camera(args.webcam)
         if cap is None:

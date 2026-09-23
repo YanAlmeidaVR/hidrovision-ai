@@ -1,24 +1,9 @@
 # -*- coding: utf-8 -*-
-"""
-demo_simulada.py — HidroVision AI (Fase 3)
-Demonstração do pipeline completo SEM câmera e SEM água.
+"""Demonstração do pipeline completo sem câmera e sem água.
 
-O que esta demo simula, e por que assim:
-
-A câmera não mede centímetros — ela vê quais números da régua ainda estão
-visíveis. Com marcações de 10 em 10 cm, quando o "40" desaparece sob a água,
-a única informação certa é "o nível passou de 40". A leitura, portanto, é um
-DEGRAU de 10 cm, não um valor contínuo.
-
-Por isso a demo (modo padrão) reproduz esse comportamento: a água sobe
-suavemente por dentro, mas o sistema recebe apenas o menor número visível.
-É o cenário conservador e realista.
-
-    python demo_simulada.py                      # leitura em degraus (realista)
-    python demo_simulada.py --interpolada        # leitura fina (se a
-                                                 # geometria funcionar bem)
-    python demo_simulada.py --modo estacao --replay-ana dados_treino.csv
-    python demo_simulada.py --modo estacao --replay-ana dados_treino.csv --rapido
+A câmera não mede centímetros — vê quais números da régua ainda estão
+visíveis. Com marcações de 10 em 10 cm, a leitura é um degrau, não um valor
+contínuo; o modo padrão desta demo reproduz esse comportamento.
 """
 import argparse
 import os
@@ -34,24 +19,19 @@ PASSO = 10.0          # cm entre marcações da régua
 
 
 def leitura_da_camera(nivel_real, interpolada=False, passo=PASSO):
-    """
-    Converte o nível real (que só a água sabe) na leitura que a câmera produz.
-
-    interpolada=False : menor número visível — degraus de `passo` cm.
-    interpolada=True  : valor refinado pela geometria, com ruído de ~1,5 cm.
-    """
+    """Converte o nível real (que só a água sabe) na leitura que a câmera
+    produz: degraus de `passo` cm, ou um valor com ruído de ~1,5 cm se
+    interpolada."""
     if interpolada:
         return round(nivel_real + np.random.uniform(-1.5, 1.5), 1)
     return float(int(nivel_real // passo) * passo)
 
 
 def demo_maquete(p, rapido=False, interpolada=False):
-    # Os modelos XGBoost foram treinados na estação 61305000, onde o nível vive
-    # entre 14 e 447 cm e o rio responde em horas. A maquete opera em 0-100 cm e
-    # enche em minutos: alimentar os modelos com essa escala produz previsão sem
-    # sentido (prevê estiagem enquanto a água sobe). Na maquete, portanto, o
-    # sistema demonstra leitura + tendência + alerta; a previsão é demonstrada
-    # com os dados reais da estação (--replay-ana).
+    # os modelos XGBoost foram treinados na escala da estação (14-447 cm); na
+    # maquete (0-100 cm, enche em minutos) produziriam previsão sem sentido
+    # (chega a prever estiagem enquanto a água sobe). Aqui a previsão fica de
+    # fora; ela é demonstrada com dados reais da estação em --replay-ana.
     p.preditor = None
     modo_txt = "INTERPOLADA (~2-3 cm)" if interpolada else "EM DEGRAUS (10 cm)"
     print(f"\n{'='*72}")
@@ -81,7 +61,7 @@ def demo_maquete(p, rapido=False, interpolada=False):
 
     for passo_i in range(25):                    # 25 leituras = ~2 h
         minutos = passo_i * 5
-        nivel_real = 38 + 14 * (minutos / 60)    # sobe 14 cm/h
+        nivel_real = 38 + 14 * (minutos / 60)
         if nivel_real > 96:
             break
         lido = leitura_da_camera(nivel_real, interpolada)
@@ -136,13 +116,8 @@ def _valor_previsao(prev, chave):
 
 
 def demo_replay_ana(p, csv, rapido=False, pausa=0.25):
-    """
-    Reproduz a cheia real de março/2026 da estação 61305000, hora a hora.
-
-    A cada hora imprime o nível observado, a tendência calculada e o nível que
-    os modelos XGBoost projetam para 6, 12 e 24 horas à frente. Os alertas
-    aparecem no meio da tabela, no instante em que disparam.
-    """
+    """Reproduz a cheia real de março/2026 da estação 61305000, hora a hora,
+    com tendência e previsão de 6/12/24h ao lado de cada leitura."""
     print(f"\n{'='*78}")
     print("REPLAY — cheia real de março/2026 (estação 61305000, dados da ANA)")
     print(f"{'='*78}")
@@ -206,7 +181,6 @@ def demo_replay_ana(p, csv, rapido=False, pausa=0.25):
         if not rapido:
             time.sleep(pausa)
 
-    # ------------------------------------------------------------------
     print(f"\n{'-'*78}")
     print(f"{len(trecho)} horas processadas. "
           f"Pico do evento: {pico_nivel:.0f} cm em {pico_ts:%d/%m %H:%M}.")

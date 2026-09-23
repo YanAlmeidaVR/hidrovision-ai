@@ -1,21 +1,8 @@
 # -*- coding: utf-8 -*-
-"""
-configurar_telegram.py — HidroVision AI
+"""Descobre o chat_id do Telegram e testa o envio de alertas.
 
-Descobre o chat_id e testa o envio de alertas pelo Telegram.
-
-Antes de usar:
-  1. crie o bot com o @BotFather no Telegram (comando /newbot);
-  2. envie qualquer mensagem ao bot recém-criado — sem isso o Telegram não
-     revela o chat_id, por segurança;
-  3. exporte o token:
-         Windows:  $env:TELEGRAM_TOKEN = "seu_token"
-         Linux:    export TELEGRAM_TOKEN=seu_token
-
-Uso:
-    python configurar_telegram.py --descobrir     # mostra os chat_id disponíveis
-    python configurar_telegram.py --testar        # envia mensagem de teste
-    python configurar_telegram.py --simular       # envia exemplos de cada alerta
+Antes de usar: crie o bot no @BotFather e envie uma mensagem a ele — sem
+isso o Telegram não revela o chat_id — depois exporte TELEGRAM_TOKEN.
 """
 import argparse
 import os
