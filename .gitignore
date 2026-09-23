@@ -5,7 +5,9 @@ regua.dat
 # checkpoint do download da ANA e série intermediária
 ana_bruto.csv
 ana_horario.csv
-# o dados_treino.csv É versionado (dataset final, 972 KB) — não ignorar
+# dataset final: já estava no histórico público, mas deixou de ser rastreado
+# a partir daqui — segue local, sem novas alterações versionadas
+preditivo/dados_treino.csv
 
 # ---------- gerados em execução ----------
 *.db
