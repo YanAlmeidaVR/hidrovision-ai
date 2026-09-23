@@ -1,6 +1,7 @@
 # ---------- dados brutos e intermediários ----------
 # pacotes anuais do INMET (347 MB) — baixar em portal.inmet.gov.br/dadoshistoricos
 *.zip
+regua.dat
 # checkpoint do download da ANA e série intermediária
 ana_bruto.csv
 ana_horario.csv
@@ -9,16 +10,15 @@ ana_horario.csv
 # ---------- gerados em execução ----------
 *.db
 *.log
-demo.db
-replay.db
 
 # ---------- saídas de treino do YOLO ----------
 runs/
 weights/
 *.onnx
 *.tflite
-# exceção: modelo quantizado que roda no Raspberry Pi (2,75 MB)
-!visao/hidrovision_v05_w8a32.tflite
+# exceção: modelo quantizado que roda no Raspberry Pi (2,7 MB)
+!visao/hidrovision_v06_regua_w8a32.tflite
+
 # ---------- credenciais ----------
 .env
 *.key
@@ -42,14 +42,3 @@ Desktop.ini
 
 # ---------- Claude Code ----------
 CLAUDE.md
-
-regua.dat
-__pycache__/
-*.db
-alertas_demo.log
-
-regua.dat
-__pycache__/
-*.db
-alertas_demo.log
-alertas.log

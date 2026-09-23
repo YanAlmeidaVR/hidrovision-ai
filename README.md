@@ -11,12 +11,12 @@ computacional e aprendizado de máquina.
 
 Em **fevereiro de 2026**, chuvas extremas atingiram a Zona da Mata Mineira.
 Juiz de Fora e Ubá registraram **73 mortes** e mais de **5.500 desalojados**.
-O acumulado de fevereiro na cidade chegou a 752 mm, mais de quatro vezes a
+O acumulado de fevereiro na cidade chegou a 752 mm, quatro vezes e meia a
 média histórica do mês, e dois dias daquela semana entraram entre os cinco mais
 chuvosos já medidos desde 1961.
 
 Dois anos antes, em **maio de 2024**, o Rio Grande do Sul viveu a maior
-catástrofe climática de sua história: **183 mortes**, 478 municípios atingidos,
+catástrofe climática de sua história: **184 mortes**, 478 municípios atingidos,
 2,4 milhões de pessoas afetadas e 442 mil obrigadas a deixar suas casas.
 
 O que chama atenção no caso gaúcho é que **o aviso existia**. Entre 26 de abril
@@ -58,12 +58,17 @@ de ser hipótese e passa a ser fato observado.
 visao/                  módulo de visão computacional
   mdYOLO.py             leitura do nível a partir da imagem
   geometria.py          validação e correção geométrica das detecções
-  hidrovision_v05.pt    modelo YOLO26n treinado (13 classes)
+  servidor_camera.py    servidor de câmera para a Raspberry Pi (modo rede)
+  hidrovision_v06_regua.pt            modelo YOLO26n com fine-tuning na régua própria
+  hidrovision_v06_regua_w8a32.tflite  versão quantizada, embarcada no Raspberry Pi
+  hidrovision_v05.pt    modelo anterior, treinado na régua de referência
+  HidroVision_FineTuning_Regua.ipynb  notebook do fine-tuning v05 → v06
 
 preditivo/              módulo de previsão
   DadosANA.py           baixa o nível da ANA (API autenticada)
   MergeInmet.py         lê os pacotes do INMET e junta as séries
   grafico_nivel.py      visualização da série histórica
+  otimizar.py           otimização de hiperparâmetros (Optuna)
   dados_treino.csv      dataset final: 27.005 horas de dados reais
   HidroVision_XGBoost.ipynb   treino dos modelos
   modelos/              modelos XGBoost treinados + metadados
@@ -76,8 +81,13 @@ integracao/             camada que liga leitura, previsão e alerta
   preditor.py           carrega os modelos e monta as variáveis
   clima.py              previsão de chuva (Open-Meteo)
   monitor.py            ciclo horário de monitoramento
-  apresentacao.py       modo de demonstração
   pipeline.py           orquestrador
+  configurar_telegram.py  descobre o chat_id e testa o envio de alertas
+  demo_simulada.py      demonstração sem câmera (maquete simulada ou replay da ANA)
+  demo_maquete.py       demonstração com a maquete física
+  dashboard.py          painel Streamlit: monitoramento, simulação e câmera ao vivo
+  pages/                páginas extras do dashboard (câmera ao vivo)
+  fase3/                snapshot arquivado de uma versão anterior desta camada
 
 docs/                   relatórios técnicos e figuras
 ```
@@ -90,18 +100,53 @@ Detector **YOLO26n** (2,38 M parâmetros) treinado para localizar a régua e os
 números gravados nela. Treze classes: os onze números de 0 a 100 (de 10 em 10),
 a régua (`gauge`) e a linha d'água (`surface`).
 
-### Resultados (conjunto de teste, 608 imagens)
+### Dois conjuntos de teste, duas perguntas diferentes
+
+O modelo passou por duas etapas de treino, e cada uma responde a uma pergunta
+distinta. Os números não são comparáveis entre si e estão separados de
+propósito.
+
+**Etapa 1 — o modelo genérico (V05), sobre réguas de vários tipos**
+*Conjunto de teste: 608 imagens do dataset público.*
 
 | Métrica | Valor |
 |---|---|
 | mAP@50 global | 90,5% |
 | mAP@50 das 12 classes úteis | 93,2% |
-| Recall das classes numéricas | 0,82 a 0,95 (todas acima da meta de 0,80) |
+| Recall das classes numéricas | 0,82 a 0,95 |
 | Recall da régua | 0,984 |
 | Confusão entre números | ≤ 1% |
 
 O erro dominante é a **não detecção** (≈ 11,5%), não a classificação
 incorreta: o modelo raramente troca um número por outro.
+
+**Etapa 2 — o modelo em operação (V06), sobre a régua fabricada**
+*Conjunto de teste: imagens da régua da maquete, em dois cenários de
+iluminação e enquadramento.*
+
+| Modelo | mAP@50 na régua fabricada |
+|---|---|
+| V05, sem fine-tuning | **0,109** |
+| V06, após fine-tuning (382 imagens) | **0,840** |
+
+Esse salto é o resultado mais importante do módulo. Um detector treinado em
+réguas genéricas praticamente não enxerga uma régua específica que nunca viu:
+0,109 significa que o sistema não funcionaria em campo. O fine-tuning com
+imagens da própria régua — congelando as 10 primeiras camadas, `lr0=0.001`,
+AdamW — resolve o problema com algumas centenas de fotos, o que é reproduzível
+por qualquer prefeitura que instale a sua própria régua.
+
+**O V06 é o modelo que roda na demonstração.** O valor de referência é
+**0,840**.
+
+### Modelo quantizado para o embarcado
+
+O V06 foi exportado para LiteRT com quantização de pesos em 8 bits (`w8a32`),
+caindo de 9,4 MB para **2,7 MB**. Numa validação lado a lado, sobre um recorte
+de teste construído separadamente, o `.pt` marcou 0,868 e o `.tflite` marcou
+0,873 — ou seja, **a quantização não produziu perda mensurável**. Como esse
+recorte não é o mesmo da tabela acima, esses dois valores servem apenas para
+comparar os formatos entre si; o número oficial do modelo continua sendo 0,840.
 
 ### Da detecção à leitura
 
@@ -117,9 +162,9 @@ precisão que ainda não foi medida em campo.
 ### Uso
 
 ```bash
-python visao/mdYOLO.py --modelo visao/hidrovision_v05.pt --imagem foto.jpg
-python visao/mdYOLO.py --modelo visao/hidrovision_v05.pt --webcam 0
-python visao/mdYOLO.py --modelo visao/hidrovision_v05.pt --pasta ./fotos --csv leituras.csv
+python visao/mdYOLO.py --modelo visao/hidrovision_v06_regua.pt --imagem foto.jpg
+python visao/mdYOLO.py --modelo visao/hidrovision_v06_regua.pt --webcam 0
+python visao/mdYOLO.py --modelo visao/hidrovision_v06_regua.pt --pasta ./fotos --csv leituras.csv
 ```
 
 ---
@@ -171,19 +216,49 @@ Validação temporal: treino de 2023 a 2025, teste em 2026. O critério é super
 **baseline de persistência** (prever que o nível não muda), exigente porque em
 regime de estiagem ele acerta na maior parte das horas.
 
-| Horizonte | MAE do modelo | MAE da persistência | Ganho | Em subidas ≥ 20 cm |
-|---|---|---|---|---|
-| t+6h | 1,27 cm | 2,68 cm | +53% | +72% |
-| t+12h | 2,44 cm | 5,16 cm | +53% | +73% |
-| t+24h | 4,74 cm | 9,62 cm | +51% | +69% |
+| Horizonte | MAE do modelo | MAE da persistência | Ganho |
+|---|---|---|---|
+| t+6h | 1,26 cm | 2,68 cm | +53% |
+| t+12h | 2,60 cm | 5,16 cm | +50% |
+| t+24h | 5,47 cm | 9,62 cm | +43% |
 
-A última coluna é a que importa: prever um rio parado é trivial, e a média
-global é dominada por essas horas. Nas subidas fortes — os eventos que
-justificam o sistema — o ganho chega a 72%.
+O erro cresce com o horizonte, como esperado, mas a vantagem sobre a
+persistência se mantém acima de 40% nos três casos. Prever um rio parado é
+trivial, e a média global é dominada por essas horas — o valor do modelo
+aparece nas horas em que o rio se move.
 
 Na detecção do cruzamento dos limiares de alerta (228, 304 e 388 cm, percentis
 90, 95 e 99 do histórico da estação), o recall ficou entre 0,95 e 0,98 em t+6h
 sobre 63 horas de emergência real ocorridas em 2026.
+
+Os valores acima são os gravados em `preditivo/modelos/metricas_delta.csv` e
+correspondem aos modelos versionados em `preditivo/modelos/`.
+
+### Validação em evento real — setembro de 2026
+
+Entre 10 e 12 de setembro de 2026 o Rio Sapucaí subiu de 87 cm para 305 cm e
+provocou inundação urbana. O monitor estava em operação contínua e registrou o
+evento do começo ao fim.
+
+| | |
+|---|---|
+| Antecedência do primeiro alerta | **66 horas** |
+| Nível no primeiro alerta | 87 cm |
+| Pico registrado | 305 cm |
+| Erro médio no horizonte de 6 h durante o evento | **1,3 cm** |
+
+O primeiro alerta de nível saiu às 08:55 do dia 10, com o rio ainda a 87 cm, e
+os alertas seguintes acompanharam a subida ao longo dos dois dias. Nos
+horizontes mais longos as projeções **subestimaram** o pico — às 08:55 o modelo
+projetava 173–175 cm onde o rio chegou a 194 cm, e o padrão se repetiu nos
+alertas posteriores. A direção e o cruzamento dos limiares foram detectados
+corretamente; a magnitude do pico, não. Para a finalidade do sistema — avisar
+com antecedência que o rio vai subir e atingir a cidade — o comportamento foi
+adequado, mas a subestimação em 12 h e 24 h é uma limitação conhecida e
+registrada.
+
+O estudo de caso completo, com a série do nível, os alertas emitidos e as
+capturas do Telegram, está em `docs/caso_setembro.html`.
 
 ### Uso
 

@@ -460,7 +460,29 @@ with aba_mon:
     st.markdown("<hr>", unsafe_allow_html=True)
     st.markdown("## Chuva")
 
-    ch1, ch2 = st.columns(2, gap="medium")
+    ch0, ch1, ch2 = st.columns(3, gap="medium")
+
+    prev = p.banco.ultima_previsao()
+    cidade_mmh = (prev or {}).get("cidade_mmh")
+    if cidade_mmh is not None:
+        cidade_acum = (prev or {}).get("cidade_acum6h")
+        nome_c = C.classificar(float(cidade_mmh))
+        grau_c, _ = C.avaliar_local({"mmh": float(cidade_mmh),
+                                     "acum_mm": float(cidade_acum or 0),
+                                     "horas_acum": 6, "intensidade": nome_c})
+        ch0.markdown(card(
+            "Chuva na cidade · Open-Meteo",
+            f"{float(cidade_mmh):.1f} mm/h",
+            pill=nome_c if float(cidade_mmh) >= 0.2 else "sem chuva",
+            pill_cor=CORES_RISCO.get(grau_c, MUT) if grau_c != "normal" else MUT,
+            nota=f"{float(cidade_acum or 0):.1f} mm nas últimas 6 h · área urbana · "
+                 f"ciclo de {prev['ts']:%d/%m %H:%M}"),
+            unsafe_allow_html=True)
+    else:
+        ch0.markdown(card(
+            "Chuva na cidade · Open-Meteo", "—",
+            nota="sem dado no banco. Rode um ciclo de monitoramento."),
+            unsafe_allow_html=True)
 
     medida = p.banco.chuva_recente(horas=6)
     if medida:
@@ -471,7 +493,7 @@ with aba_mon:
                                    "horas_acum": 6, "intensidade": nome})
         cor_ch = CORES_RISCO.get(grau, MUT)
         ch1.markdown(card(
-            "Chuva na cidade · medida",
+            "Chuva na cidade · pluviômetro",
             f"{mmh:.1f} mm/h",
             pill=nome if mmh >= 0.2 else "sem chuva",
             pill_cor=cor_ch if grau != "normal" else MUT,
@@ -480,11 +502,11 @@ with aba_mon:
             unsafe_allow_html=True)
     else:
         ch1.markdown(card(
-            "Chuva na cidade · medida", "—",
+            "Chuva na cidade · pluviômetro", "—",
             nota="sem dado de pluviômetro no banco. Rode um ciclo para trazer "
                  "a chuva medida pela estação."), unsafe_allow_html=True)
 
-    prev_bacia = p.banco.ultima_previsao()
+    prev_bacia = prev
     if prev_bacia and prev_bacia.get("chuva_total_mm") is not None:
         tot = float(prev_bacia["chuva_total_mm"])
         pico = prev_bacia.get("chuva_pico_mmh")
@@ -506,7 +528,10 @@ with aba_mon:
     st.markdown(
         '<div class="hv-legenda">A chuva da bacia entra nos modelos do rio, '
         'com horas de atraso até chegar aqui. A da cidade não passa por eles: '
-        'vai para a drenagem urbana e alaga rua antes de qualquer cheia.'
+        'vai para a drenagem urbana e alaga rua antes de qualquer cheia. '
+        'O Open-Meteo estima a chuva sobre a área urbana e acompanha o começo '
+        'da chuva; o pluviômetro mede de fato, mas só registra a cada 0,2 mm e '
+        'publica de hora em hora.'
         '</div>', unsafe_allow_html=True)
 
     st.markdown("<hr>", unsafe_allow_html=True)
