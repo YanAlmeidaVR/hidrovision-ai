@@ -42,8 +42,8 @@ except ImportError:
 
 # classes numéricas do modelo (as demais são gauge e surface)
 NUMERICAS = {"0", "10", "20", "30", "40", "50", "60", "70", "80", "90", "100"}
-CONF_MIN = 0.35
-CONF_SURFACE = 0.60
+CONF_MIN = 0.30
+CONF_SURFACE = 0.30
 JANELA_MEDIANA = 5
 
 
