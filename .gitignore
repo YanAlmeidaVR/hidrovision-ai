@@ -23,6 +23,7 @@ weights/
 
 # ---------- credenciais ----------
 .env
+credenciais.bat
 *.key
 secrets.json
 

@@ -15,6 +15,8 @@ import pandas as pd
 import banco as B
 import pipeline as PL
 
+PASTA = os.path.dirname(os.path.abspath(__file__))
+
 PASSO = 10.0          # cm entre marcações da régua
 
 
@@ -222,8 +224,9 @@ def demo_replay_ana(p, csv, rapido=False, pausa=0.25):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--modo", default="maquete", choices=["maquete", "estacao"])
-    ap.add_argument("--db", default="demo.db")
-    ap.add_argument("--modelos", default=".",
+    ap.add_argument("--db", default=os.path.join(PASTA, "demo.db"))
+    ap.add_argument("--modelos",
+                    default=os.path.join(PASTA, "..", "preditivo", "modelos"),
                     help="pasta com os modelo_delta_*.json")
     ap.add_argument("--replay-ana", metavar="CSV",
                     help="reproduz a cheia real de mar/2026 desse CSV")

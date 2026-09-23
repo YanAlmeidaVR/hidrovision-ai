@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 FUSO = "America/Sao_Paulo"
-DB_PADRAO = "hidrovision.db"
+DB_PADRAO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hidrovision.db")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS leituras (

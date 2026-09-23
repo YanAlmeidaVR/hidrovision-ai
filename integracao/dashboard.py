@@ -21,7 +21,10 @@ import banco as B
 import pipeline as PL
 import monitor as M
 import clima as C
+import camera_rede as CR
 
+# padrões a partir deste arquivo, pra valer de qualquer diretório de trabalho
+MODELOS_PADRAO = AQUI.parent / "preditivo" / "modelos"
 # paleta (a mesma dos slides)
 NAVY = "#0B2239"
 TEAL = "#0E7490"
@@ -174,6 +177,59 @@ def descrever_clima(clima):
                 if isinstance(mm, (int, float)) else "previsão obtida")
 
 
+def consultar_camera(endereco):
+    """Leitura da Raspberry, ou None se ela não responder a tempo."""
+    try:
+        return CR.buscar_leitura(endereco, timeout=1.5)
+    except Exception:
+        return None
+
+
+@st.fragment(run_every=2)
+def nivel_camera(endereco):
+    d = consultar_camera(endereco)
+    online = d is not None
+    chave = f"camera_online:{endereco}"
+    # o vídeo fica fora do fragmento (recriar o <img> reabriria o stream);
+    # quando a Raspberry cai ou volta, recarrega a página pra trocar o vídeo
+    # pela mensagem, ou o contrário
+    if online != st.session_state.get(chave):
+        st.session_state[chave] = online
+        st.rerun()
+    if not online:
+        return
+    if not d.get("pronto"):
+        st.markdown(card("Nível na régua", "—",
+                         nota="a Raspberry está iniciando o modelo"),
+                    unsafe_allow_html=True)
+    elif d.get("nivel_cm") is None:
+        st.markdown(card("Nível na régua", "—", nota="procurando a régua"),
+                    unsafe_allow_html=True)
+    else:
+        st.markdown(card("Nível na régua", f"{float(d['nivel_cm']):.0f} cm",
+                         cor_num=TEAL, nota="leitura da câmera, ao vivo"),
+                    unsafe_allow_html=True)
+
+
+def camera_ao_vivo(endereco):
+    """Vídeo e nível lidos pela Raspberry. Sem resposta, só uma nota discreta
+    no lugar do vídeo; o resto do painel segue normal."""
+    chave = f"camera_online:{endereco}"
+    if chave not in st.session_state:
+        st.session_state[chave] = consultar_camera(endereco) is not None
+    col_v, col_n = st.columns([2, 1], gap="large")
+    if st.session_state[chave]:
+        col_v.markdown(CR.html_video(
+            endereco, "width:100%;max-width:640px;border-radius:12px"),
+            unsafe_allow_html=True)
+    else:
+        col_v.markdown(f'<div class="hv-legenda">Câmera sem resposta em '
+                       f'{endereco}. O painel segue com as leituras gravadas.'
+                       f'</div>', unsafe_allow_html=True)
+    with col_n:
+        nivel_camera(endereco)
+
+
 st.sidebar.markdown('<div class="hv-marca">HidroVision AI</div>'
                     '<div class="hv-sub">Painel de monitoramento</div>',
                     unsafe_allow_html=True)
@@ -183,10 +239,13 @@ modo = st.sidebar.radio(
     format_func=lambda m: ("Régua urbana · 0 a 100 cm" if m == "maquete"
                            else "Estação 61305000 · cota do rio"))
 
-db = st.sidebar.text_input("Banco de dados",
-                           "demo.db" if modo == "maquete" else "hidrovision.db")
-pasta_modelos = st.sidebar.text_input("Pasta dos modelos",
-                                      "../preditivo/modelos")
+db = st.sidebar.text_input(
+    "Banco de dados",
+    str(AQUI / ("demo.db" if modo == "maquete" else "hidrovision.db")))
+pasta_modelos = st.sidebar.text_input("Pasta dos modelos", str(MODELOS_PADRAO))
+if modo == "maquete":
+    endereco_camera = st.sidebar.text_input(
+        "Endereço da Raspberry", CR.ENDERECO_PADRAO).rstrip("/")
 
 st.sidebar.divider()
 st.sidebar.subheader("Ciclo automático")
@@ -391,6 +450,11 @@ with aba_mon:
         f'{limiares["atencao"]:.0f} · alerta {limiares["alerta"]:.0f} · '
         f'emergência {limiares["emergencia"]:.0f} · crítico {critico:.0f} cm'
         f'</div>', unsafe_allow_html=True)
+
+    if modo == "maquete":
+        st.markdown("<hr>", unsafe_allow_html=True)
+        st.markdown("## Câmera ao vivo")
+        camera_ao_vivo(endereco_camera)
 
     st.markdown("<hr>", unsafe_allow_html=True)
     st.markdown("## Previsão do nível")

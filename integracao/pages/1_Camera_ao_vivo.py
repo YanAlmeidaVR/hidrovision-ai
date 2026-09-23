@@ -7,10 +7,8 @@ simulado (modelos XGBoost reais) e a variação prevista é somada à leitura da
 régua pra dizer se e quando a água transbordaria. O monitor do rio real fica
 na página principal do dashboard.
 """
-import json
 import sys
 import time
-import urllib.request
 from pathlib import Path
 
 import cv2
@@ -23,6 +21,7 @@ sys.path.insert(0, str(RAIZ / "visao"))
 
 import mdYOLO as V
 import demo_maquete as D
+import camera_rede as CR
 
 st.set_page_config(page_title="HidroVision AI · régua ao vivo", page_icon="💧",
                    layout="wide")
@@ -102,7 +101,7 @@ LOCAL = "Câmera deste computador"
 st.sidebar.subheader("Câmera")
 fonte = st.sidebar.radio("Fonte", [REDE, LOCAL])
 if fonte == REDE:
-    endereco = st.sidebar.text_input("Endereço da Raspberry", "http://raspberrypi.local:8000").rstrip("/")
+    endereco = st.sidebar.text_input("Endereço da Raspberry", CR.ENDERECO_PADRAO).rstrip("/")
     caminho_modelo, indice = None, None
 else:
     endereco = None
@@ -170,15 +169,10 @@ def mostrar_info(nivel, vals, detalhe):
             st.caption(m)
 
 
-def buscar_leitura(url):
-    with urllib.request.urlopen(f"{url}/leitura", timeout=3) as r:
-        return json.loads(r.read().decode("utf-8"))
-
-
 @st.fragment(run_every=intervalo if ligada else None)
 def painel_rede():
     try:
-        d = buscar_leitura(endereco)
+        d = CR.buscar_leitura(endereco)
     except Exception as e:
         st.error(f"Sem resposta da Raspberry em {endereco}: {e}")
         st.caption("Confira se o servidor_camera.py está rodando e se os dois estão na mesma rede.")
@@ -235,8 +229,7 @@ def painel():
 if fonte == REDE:
     if ligada:
         col_img, col_info = st.columns([3, 2], gap="large")
-        col_img.markdown(f'<img src="{endereco}/video" style="width:100%;border-radius:10px">',
-                         unsafe_allow_html=True)
+        col_img.markdown(CR.html_video(endereco), unsafe_allow_html=True)
         with col_info:
             painel_rede()
     else:

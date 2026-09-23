@@ -31,7 +31,8 @@ import alertas as A
 import pipeline as PL
 import preditor as P
 
-DB_DEMO = "demo_maquete.db"
+PASTA = os.path.dirname(os.path.abspath(__file__))
+DB_DEMO = os.path.join(PASTA, "demo_maquete.db")
 NIVEL_CRITICO = 100.0
 LIMIARES_RIO = A.MODOS["estacao"]
 
@@ -241,8 +242,8 @@ def ciclo_demo(p, nivel_cm, metodo, confianca, menor, ts=None):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--modelo", default=os.path.join("..", "visao", "hidrovision_v06_regua.pt"))
-    ap.add_argument("--modelos", default=os.path.join("..", "preditivo", "modelos"))
+    ap.add_argument("--modelo", default=os.path.join(PASTA, "..", "visao", "hidrovision_v06_regua.pt"))
+    ap.add_argument("--modelos", default=os.path.join(PASTA, "..", "preditivo", "modelos"))
     ap.add_argument("--webcam", type=int, default=2 if sys.platform.startswith("win") else 0)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--intervalo", type=float, default=3.0,
