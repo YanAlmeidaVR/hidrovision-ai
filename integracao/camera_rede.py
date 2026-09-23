@@ -2,7 +2,7 @@
 """
 Acesso à câmera da Raspberry (servidor_camera.py) pela rede.
 
-Usado pelo dashboard principal e pela página "Régua ao vivo". Não importa o
+Usado pelo painel da régua urbana (regua_ao_vivo.py). Não importa o
 YOLO nem o OpenCV: o vídeo é aberto pelo navegador direto da Raspberry, e aqui
 só se consulta o JSON do /leitura.
 """

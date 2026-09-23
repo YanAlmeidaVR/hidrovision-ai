@@ -85,8 +85,8 @@ integracao/             camada que liga leitura, previsão e alerta
   configurar_telegram.py  descobre o chat_id e testa o envio de alertas
   demo_simulada.py      demonstração sem câmera (maquete simulada ou replay da ANA)
   demo_maquete.py       demonstração com a maquete física
-  dashboard.py          painel Streamlit: monitoramento, simulação e câmera ao vivo
-  pages/                páginas extras do dashboard (câmera ao vivo)
+  dashboard.py          painel Streamlit: estação (monitoramento e simulação) e régua urbana
+  regua_ao_vivo.py      painel da régua urbana: câmera ao vivo e previsão
   fase3/                snapshot arquivado de uma versão anterior desta camada
 
 docs/                   relatórios técnicos e figuras
