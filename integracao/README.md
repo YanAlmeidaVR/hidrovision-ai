@@ -25,9 +25,11 @@ leitura (YOLO) ──> banco.py ──> serie horária ──> preditor.py
 | `clima.py` | previsão de chuva pela API do Open-Meteo (sem chave) |
 | `monitor.py` | laço contínuo: consulta a ANA + previsão, prevê e classifica o risco |
 | `demo_simulada.py` | demonstração sem câmera (maquete simulada ou replay da ANA) |
-| `apresentacao.py` | modo de feira: rio real e régua urbana lado a lado |
+| `demo_maquete.py` | modo de feira: câmera lendo a maquete + rio simulado nos modelos |
+| `dashboard.py` | painel Streamlit sobre o `hidrovision.db` |
+| `regua_ao_vivo.py` | página da régua urbana ao vivo dentro do dashboard |
+| `camera_rede.py` | consulta a leitura da câmera da Raspberry pela rede |
 | `configurar_telegram.py` | descobre o chat_id e testa o envio de alertas |
-| `cenario_chuva.json` | previsão congelada, para não depender de rede no dia |
 
 Os `modelo_delta_6h/12h/24h.json` precisam estar na pasta indicada em
 `pasta_modelos` (padrão: a atual).
@@ -148,27 +150,25 @@ falhar, o ciclo segue com o que já está no banco e registra o aviso.
 
 ## Modo de apresentação
 
-O `apresentacao.py` foi feito para a feira. Ele exibe as duas camadas ao mesmo
-tempo: o rio subindo, reproduzido a partir de um evento **real** registrado pela
-ANA em março de 2026, e a régua urbana da maquete, lida pela câmera.
+O `demo_maquete.py` foi feito para a feira. A câmera lê a régua da maquete de
+verdade (YOLO + geometria), e os três modelos XGBoost preveem sobre um cenário
+de rio **simulado** — numa feira não há cheia acontecendo. A variação prevista
+é somada à leitura da régua para dizer se e quando a água transbordaria.
 
-A previsão de chuva vem de `cenario_chuva.json`, um arquivo preparado antes.
-Numa feira, depender de rede é risco desnecessário; o arquivo descreve o
-cenário narrado ("128 mm nos próximos 3 dias") e o sistema funciona offline.
+Usa um banco próprio (`demo_maquete.db`, recriado a cada execução) e marca os
+alertas como DEMO, sem tocar no `hidrovision.db` do monitor real.
 
 ```bash
-# ensaio, sem câmera (a régua também é simulada)
-python apresentacao.py --dados dados_treino.csv --modelos ../preditivo/modelos
+# ensaio, sem câmera (régua fixa em 40 cm)
+python demo_maquete.py --sem-camera --sem-telegram
 
 # no dia, com a câmera lendo a maquete
-python apresentacao.py --dados dados_treino.csv --modelos ../preditivo/modelos --camera
-
-# velocidade: segundos de exibição por hora de dados
-python apresentacao.py --seg-por-hora 0.5
+python demo_maquete.py --webcam 0
 ```
 
-A tela mostra, a cada hora simulada, o nível do rio com a previsão para 24 h em
-dois cenários, o nível da régua com a folga restante, e o risco combinado.
+Teclas: `c` injeta a previsão de chuva, `n` volta ao rio firme, `r` refaz a
+previsão, `s` salva a tela, `q` sai. Com `--auto-chuva N` a chuva entra
+sozinha após N segundos.
 
 Uma observação sobre o horizonte: **os modelos preveem no máximo 24 horas**. A
 antecipação de vários dias vem da previsão meteorológica, não deles. A narrativa

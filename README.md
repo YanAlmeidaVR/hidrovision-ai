@@ -87,7 +87,6 @@ integracao/             camada que liga leitura, previsão e alerta
   demo_maquete.py       demonstração com a maquete física
   dashboard.py          painel Streamlit: estação (monitoramento e simulação) e régua urbana
   regua_ao_vivo.py      painel da régua urbana: câmera ao vivo e previsão
-  fase3/                snapshot arquivado de uma versão anterior desta camada
 
 docs/                   relatórios técnicos e figuras
 ```
