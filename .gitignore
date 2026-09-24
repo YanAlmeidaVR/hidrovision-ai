@@ -1,7 +1,7 @@
 # ---------- dados brutos e intermediários ----------
 # pacotes anuais do INMET (347 MB) — baixar em portal.inmet.gov.br/dadoshistoricos
 *.zip
-regua.dat
+*.dat
 # checkpoint do download da ANA e série intermediária
 ana_bruto.csv
 ana_horario.csv
