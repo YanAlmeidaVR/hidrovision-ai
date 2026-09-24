@@ -161,9 +161,9 @@ precisão que ainda não foi medida em campo.
 ### Uso
 
 ```bash
-python visao/mdYOLO.py --modelo visao/hidrovision_v06_regua.pt --imagem foto.jpg
-python visao/mdYOLO.py --modelo visao/hidrovision_v06_regua.pt --webcam 0
-python visao/mdYOLO.py --modelo visao/hidrovision_v06_regua.pt --pasta ./fotos --csv leituras.csv
+python visao/mdYOLO.py --modelo visao/hidrovision_v07_regua.pt --imagem foto.jpg
+python visao/mdYOLO.py --modelo visao/hidrovision_v07_regua.pt --webcam 0
+python visao/mdYOLO.py --modelo visao/hidrovision_v07_regua.pt --pasta ./fotos --csv leituras.csv
 ```
 
 ---

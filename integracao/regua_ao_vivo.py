@@ -25,8 +25,8 @@ import demo_maquete as D
 import camera_rede as CR
 
 WINDOWS = sys.platform.startswith("win")
-NCNN = RAIZ / "visao" / "hidrovision_v06_regua_ncnn_model"
-PT = RAIZ / "visao" / "hidrovision_v06_regua.pt"
+NCNN = RAIZ / "visao" / "hidrovision_v07_regua_ncnn_model"
+PT = RAIZ / "visao" / "hidrovision_v07_regua.pt"
 MODELOS_RIO = RAIZ / "preditivo" / "modelos"
 CORES = {None: "#15803D", "atencao": "#F59E0B", "alerta": "#EA580C",
          "emergencia": "#DC2626"}
@@ -88,9 +88,11 @@ def selo(urgencia):
 
 
 def modelo_padrao():
-    tflite = sorted((RAIZ / "visao").rglob("*v06*.tflite"))
-    if tflite:
-        return str(tflite[0])
+    """Prefere o V07; o V06 fica como reserva caso o V07 não esteja presente."""
+    for versao in ("v07", "v06"):
+        tflite = sorted((RAIZ / "visao").rglob(f"*{versao}*.tflite"))
+        if tflite:
+            return str(tflite[0])
     if NCNN.exists():
         return str(NCNN)
     return str(PT)

@@ -242,7 +242,7 @@ def ciclo_demo(p, nivel_cm, metodo, confianca, menor, ts=None):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--modelo", default=os.path.join(PASTA, "..", "visao", "hidrovision_v06_regua.pt"))
+    ap.add_argument("--modelo", default=os.path.join(PASTA, "..", "visao", "hidrovision_v07_regua.pt"))
     ap.add_argument("--modelos", default=os.path.join(PASTA, "..", "preditivo", "modelos"))
     ap.add_argument("--webcam", type=int, default=2 if sys.platform.startswith("win") else 0)
     ap.add_argument("--imgsz", type=int, default=640)

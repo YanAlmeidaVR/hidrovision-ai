@@ -18,8 +18,9 @@ runs/
 weights/
 *.onnx
 *.tflite
-# exceção: modelo quantizado que roda no Raspberry Pi (2,7 MB)
+# exceção: modelos quantizados que rodam no Raspberry Pi (2,7 MB cada; V07 padrão, V06 reserva)
 !visao/hidrovision_v06_regua_w8a32.tflite
+!visao/hidrovision_v07_regua_w8a32.tflite
 
 # ---------- credenciais ----------
 .env

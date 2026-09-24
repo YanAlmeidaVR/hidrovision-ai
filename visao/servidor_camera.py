@@ -9,7 +9,7 @@ para o dashboard do notebook.
     GET /          página simples para conferir no navegador
 
 Uso:
-    python servidor_camera.py --modelo hidrovision_v06_regua_w8a32.tflite --webcam 0
+    python servidor_camera.py --modelo hidrovision_v07_regua_w8a32.tflite --webcam 0
     no notebook: http://raspberrypi.local:8000
 """
 import argparse
@@ -100,7 +100,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--modelo", default="hidrovision_v06_regua_w8a32.tflite")
+    ap.add_argument("--modelo", default="hidrovision_v07_regua_w8a32.tflite")
     ap.add_argument("--webcam", type=int, default=0)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--porta", type=int, default=8000)

@@ -14,9 +14,9 @@ Método (na ordem em que é tentado):
      Resolução ~10 cm.
 
 Uso:
-    python mdYOLO.py --modelo hidrovision_v06_regua.pt --imagem foto.jpg
-    python mdYOLO.py --modelo hidrovision_v06_regua.pt --pasta ./fotos --csv saida.csv
-    python mdYOLO.py --modelo hidrovision_v06_regua.pt --webcam 0
+    python mdYOLO.py --modelo hidrovision_v07_regua.pt --imagem foto.jpg
+    python mdYOLO.py --modelo hidrovision_v07_regua.pt --pasta ./fotos --csv saida.csv
+    python mdYOLO.py --modelo hidrovision_v07_regua.pt --webcam 0
 """
 import argparse
 import csv
@@ -421,7 +421,7 @@ def processar_imagem(modelo, caminho, imgsz, salvar_em=None):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--modelo", default="hidrovision_v06_regua.pt")
+    ap.add_argument("--modelo", default="hidrovision_v07_regua.pt")
     ap.add_argument("--imagem")
     ap.add_argument("--pasta")
     ap.add_argument("--webcam", type=int)
