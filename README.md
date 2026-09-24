@@ -59,9 +59,11 @@ visao/                  módulo de visão computacional
   mdYOLO.py             leitura do nível a partir da imagem
   geometria.py          validação e correção geométrica das detecções
   servidor_camera.py    servidor de câmera para a Raspberry Pi (modo rede)
-  hidrovision_v06_regua.pt            modelo YOLO26n com fine-tuning na régua própria
-  hidrovision_v06_regua_w8a32.tflite  versão quantizada, embarcada no Raspberry Pi
-  hidrovision_v05.pt    modelo anterior, treinado na régua de referência
+  hidrovision_v07_regua.pt            modelo padrão: YOLO26n treinado com 778 imagens da régua própria
+  hidrovision_v07_regua_w8a32.tflite  versão quantizada do V07, embarcada no Raspberry Pi
+  hidrovision_v06_regua.pt            modelo anterior (382 imagens), mantido como reserva
+  hidrovision_v06_regua_w8a32.tflite  versão quantizada do V06, reserva
+  hidrovision_v05.pt    modelo genérico, treinado na régua de referência
   HidroVision_FineTuning_Regua.ipynb  notebook do fine-tuning v05 → v06
 
 preditivo/              módulo de previsão
@@ -99,11 +101,11 @@ Detector **YOLO26n** (2,38 M parâmetros) treinado para localizar a régua e os
 números gravados nela. Treze classes: os onze números de 0 a 100 (de 10 em 10),
 a régua (`gauge`) e a linha d'água (`surface`).
 
-### Dois conjuntos de teste, duas perguntas diferentes
+### Três conjuntos de teste, três perguntas diferentes
 
-O modelo passou por duas etapas de treino, e cada uma responde a uma pergunta
-distinta. Os números não são comparáveis entre si e estão separados de
-propósito.
+O modelo passou por etapas de treino, e cada uma responde a uma pergunta
+distinta. Os números de etapas diferentes não são comparáveis entre si e estão
+separados de propósito.
 
 **Etapa 1 — o modelo genérico (V05), sobre réguas de vários tipos**
 *Conjunto de teste: 608 imagens do dataset público.*
@@ -119,7 +121,7 @@ propósito.
 O erro dominante é a **não detecção** (≈ 11,5%), não a classificação
 incorreta: o modelo raramente troca um número por outro.
 
-**Etapa 2 — o modelo em operação (V06), sobre a régua fabricada**
+**Etapa 2 — o primeiro fine-tuning (V06), sobre a régua fabricada**
 *Conjunto de teste: imagens da régua da maquete, em dois cenários de
 iluminação e enquadramento.*
 
@@ -135,17 +137,35 @@ imagens da própria régua — congelando as 10 primeiras camadas, `lr0=0.001`,
 AdamW — resolve o problema com algumas centenas de fotos, o que é reproduzível
 por qualquer prefeitura que instale a sua própria régua.
 
-**O V06 é o modelo que roda na demonstração.** O valor de referência é
-**0,840**.
+**Etapa 3 — o modelo em operação (V07), mais imagens da régua fabricada**
+*Conjunto de teste: o mesmo para os dois modelos, diferente do usado na
+etapa 2.*
+
+| Modelo | mAP@50 | Recall |
+|---|---|---|
+| V06 (382 imagens) | 0,717 | 0,657 |
+| V07 (778 imagens) | **0,895** | **0,919** |
+
+Com o dobro de imagens da régua própria, o V07 passa a encontrar muito mais
+do que o V06 encontrava: o recall sobe de 0,657 para 0,919. Isso ataca
+justamente o erro dominante do módulo, a não detecção. Como esse conjunto de
+teste não é o da etapa 2, o 0,717 do V06 aqui não contradiz o 0,840 de lá: são
+perguntas diferentes, e a comparação que vale é a desta tabela, entre os dois
+modelos no mesmo conjunto.
+
+**O V07 é o modelo que roda na demonstração.** O valor de referência é
+**0,895**. O V06 continua no repositório como reserva.
 
 ### Modelo quantizado para o embarcado
 
-O V06 foi exportado para LiteRT com quantização de pesos em 8 bits (`w8a32`),
-caindo de 9,4 MB para **2,7 MB**. Numa validação lado a lado, sobre um recorte
-de teste construído separadamente, o `.pt` marcou 0,868 e o `.tflite` marcou
-0,873 — ou seja, **a quantização não produziu perda mensurável**. Como esse
-recorte não é o mesmo da tabela acima, esses dois valores servem apenas para
-comparar os formatos entre si; o número oficial do modelo continua sendo 0,840.
+Os modelos são exportados para LiteRT com quantização de pesos em 8 bits
+(`w8a32`), caindo de 9,4 MB para **2,7 MB**. A perda da quantização foi medida
+no V06: numa validação lado a lado, sobre um recorte de teste construído
+separadamente, o `.pt` marcou 0,868 e o `.tflite` marcou 0,873, ou seja,
+**a quantização não produziu perda mensurável**. Esses dois valores servem
+apenas para comparar os formatos entre si. O `.tflite` do V07 usa a mesma
+quantização (`w8a32`), mas a comparação lado a lado ainda não foi repetida
+para ele.
 
 ### Da detecção à leitura
 
